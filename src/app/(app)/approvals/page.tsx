@@ -11,7 +11,7 @@ import { bulkApproveAction } from "./actions";
 export const metadata: Metadata = { title: "Approvals" };
 
 export default async function ApprovalsPage() {
-  const ctx = await requireCtx("leave.approve");
+  const ctx = await requireCtx("claims.approve");
   const p = await listPendingApprovals(ctx);
   const total = p.leave.length + p.claims.length + p.overtime.length + p.loans.length + p.compensation.length;
 

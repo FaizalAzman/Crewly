@@ -22,7 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const [notifications, approvals] = await Promise.all([
     prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 15 }),
-    can(role, "leave.approve")
+    can(role, "claims.approve")
       ? countPendingApprovals({ tenantId: user.tenantId, userId: user.id, userName: user.name, role, employeeId: user.employeeId })
       : Promise.resolve(0),
   ]);

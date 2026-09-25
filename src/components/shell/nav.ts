@@ -19,7 +19,7 @@ export const NAV: NavGroup[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard", permission: "employee.view" },
       { href: "/me", label: "Me", icon: "Smile" },
-      { href: "/approvals", label: "Approvals", icon: "CheckCheck", permission: "leave.approve", badgeKey: "approvals" },
+      { href: "/approvals", label: "Approvals", icon: "CheckCheck", permission: "claims.approve", badgeKey: "approvals" },
     ],
   },
   {
