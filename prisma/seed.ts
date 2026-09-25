@@ -125,7 +125,7 @@ async function main() {
   if (existing) await prisma.tenant.delete({ where: { id: existing.id } });
 
   const tenant = await prisma.tenant.create({
-    data: { name: "Lumen Digital", slug: "lumen-digital", plan: "GROWTH", seats: 60, trialEndsAt: null, restDay: 0, offDay: 6, workDaysPerWeek: 5 },
+    data: { name: "Lumen Digital", slug: "lumen-digital", plan: "ENTERPRISE", seats: 60, trialEndsAt: null, restDay: 0, offDay: 6, workDaysPerWeek: 5 },
   });
   const T = tenant.id;
   await bootstrapTenant(T);
@@ -656,7 +656,7 @@ async function main() {
   // ── Billing ──
   for (let m = 1; m <= 9; m++) {
     const seats = 44 + Math.floor(m / 3);
-    const amount = seats * 12;
+    const amount = seats * 18;
     await prisma.invoice.create({
       data: { tenantId: T, number: `INV-2026-${String(m).padStart(4, "0")}`, period: `2026-${String(m).padStart(2, "0")}`, seats, amount, sst: round2(amount * 0.08), status: m === 9 ? "DUE" : "PAID", issuedAt: D(`2026-${String(m).padStart(2, "0")}-01`) },
     });
