@@ -65,7 +65,7 @@ export default function Landing() {
             </div>
             <p className="mt-4 text-xs font-semibold text-muted">No credit card required · Set up in under 10 minutes · Cancel anytime</p>
           </div>
-          <div className="relative">
+          <div className="relative mb-10 lg:mb-0">
             <div className="rotate-2 rounded-3xl border-2 border-ink bg-card p-5 shadow-brutal-lg">
               <div className="flex items-center justify-between">
                 <span className="font-display text-lg font-extrabold">Payroll · September 2026</span>
@@ -92,7 +92,7 @@ export default function Landing() {
                 ))}
               </div>
             </div>
-            <div className="absolute -bottom-6 -left-6 -rotate-6 rounded-2xl border-2 border-ink bg-tangerine px-4 py-3 font-display text-white shadow-brutal">
+            <div className="absolute -bottom-14 -right-4 rotate-3 rounded-2xl border-2 border-ink bg-tangerine px-4 py-3 font-display text-white shadow-brutal lg:-right-8">
               <p className="text-xs font-bold uppercase">Payroll time saved</p>
               <p className="text-2xl font-extrabold">~26 hrs / month</p>
             </div>
