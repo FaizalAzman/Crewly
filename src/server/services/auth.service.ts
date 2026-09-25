@@ -63,9 +63,9 @@ export async function authenticate(emailRaw: string, password: string) {
   if (!user || !user.active) throw new DomainError("Hmm, that email & password combo doesn't match.");
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) throw new DomainError("Hmm, that email & password combo doesn't match.");
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   await prisma.auditLog.create({
     data: { tenantId: user.tenantId, userId: user.id, userName: user.name, action: "LOGIN", entity: "User", entityId: user.id, summary: `${user.name} signed in` },
   });
-  return user;
+  return updated;
 }
