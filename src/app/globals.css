@@ -1,26 +1,144 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #fff8ec;
+  --paper-2: #fdf0da;
+  --card: #ffffff;
+  --ink: #16140f;
+  --ink-2: #3b362c;
+  --muted: #7a7061;
+  --line: #16140f;
+  --soft-line: #e9dcc4;
+
+  --tangerine: #ff6b35;
+  --lime: #c6f432;
+  --grape: #7c5cff;
+  --sky: #5cc8ff;
+  --bubblegum: #ff8fd8;
+  --sunny: #ffd23f;
+  --mint: #3ddc97;
+  --cherry: #ff4d5e;
+
+  --shadow: 4px 4px 0 0 var(--ink);
+  --shadow-sm: 2px 2px 0 0 var(--ink);
+  --shadow-lg: 6px 6px 0 0 var(--ink);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-soft-line: var(--soft-line);
+  --color-tangerine: var(--tangerine);
+  --color-lime: var(--lime);
+  --color-grape: var(--grape);
+  --color-sky: var(--sky);
+  --color-bubblegum: var(--bubblegum);
+  --color-sunny: var(--sunny);
+  --color-mint: var(--mint);
+  --color-cherry: var(--cherry);
+
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+
+  --shadow-brutal: var(--shadow);
+  --shadow-brutal-sm: var(--shadow-sm);
+  --shadow-brutal-lg: var(--shadow-lg);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-font-smoothing: antialiased;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+/* Subtle dotted "notebook" texture on the canvas */
+.bg-dots {
+  background-image: radial-gradient(color-mix(in oklab, var(--ink) 12%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.font-display {
+  font-family: var(--font-display), var(--font-body), sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Brutal press effect for anything clickable with a shadow */
+.press {
+  transition: transform 80ms ease, box-shadow 80ms ease;
+}
+.press:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 0 var(--ink);
+}
+.press:active {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 0 var(--ink);
+}
+
+.wiggle:hover {
+  animation: wiggle 0.4s ease-in-out;
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-4deg); }
+  75% { transform: rotate(4deg); }
+}
+
+.marquee {
+  animation: marquee 30s linear infinite;
+}
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.pop-in {
+  animation: pop 180ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+@keyframes pop {
+  from { transform: scale(0.94); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.highlighter {
+  background: linear-gradient(transparent 55%, var(--lime) 55%, var(--lime) 90%, transparent 90%);
+}
+
+dialog::backdrop {
+  background: color-mix(in oklab, var(--ink) 45%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--ink);
+}
+
+::selection {
+  background: var(--lime);
+  color: var(--ink);
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+  .print-plain { box-shadow: none !important; border: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee, .wiggle:hover, .pop-in { animation: none; }
+  .press, .press:hover, .press:active { transition: none; transform: none; }
 }
