@@ -82,7 +82,7 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 
 | Feature | Why customers want it | Effort |
 |---|---|---|
-| **Role-based "getting started" guidance** | Owners get a six-step setup checklist (`/welcome`), but invited HR, payroll, managers and employees land with no orientation. Add a first-login checklist per role (e.g. employee: check profile & bank details, submit TP1 reliefs, try clock-in; manager: find the approvals inbox), short in-page tips on first visit, a `/help` page of task guides, and a friendlier invitation email that explains what the person can do. | M |
+| **Role-based "getting started" guidance** | **Shipped:** a per-role checklist that ticks itself off from real data (employee: profile & bank, TP1, clock-in, policies; manager: first approval; HR: complete records, logins for everyone; payroll: employer numbers, first run), shown where each person lands; `/help` task guides filtered by role; an invitation email that says what the role can do. Next: short in-page tips on a person's first visit to a page. | S |
 | **Bahasa Malaysia UI** | Many SME owners, supervisors and factory staff prefer BM. It's also needed for the PDPA notice. Use `next-intl` with EN/BM, and later 中文 and தமிழ் for payslips. | L |
 | **WhatsApp notifications & approvals** | WhatsApp is how Malaysian teams actually communicate. Send leave/claim approvals with one-tap approve links and payslip-ready alerts through the WhatsApp Business API. | M |
 | **Installable PWA for Me** | Clock-in, leave, claims and payslips from the home screen, with offline clock-in queued until the connection returns. | M |
