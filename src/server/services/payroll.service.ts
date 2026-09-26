@@ -6,6 +6,7 @@ import { parsePeriod, periodOf, round2, shiftPeriod } from "@/lib/utils";
 import type { Citizenship } from "@/lib/statutory/epf";
 import { assertCan, audit, claimTransition, notifyEmployee } from "../guard";
 import { applyDueCompensation } from "./money.service";
+import { invalidateCalculatedRuns } from "./payroll-inputs";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { holidaySet, tenantWorkWeek } from "./holiday.service";
 
@@ -22,7 +23,13 @@ export async function createPayrollRun(ctx: Ctx, input: { companyId: string; per
   const { start } = parsePeriod(input.period);
   const later = await prisma.payrollRun.findFirst({ where: { companyId: input.companyId, period: { gt: input.period }, status: { in: FINAL } } });
   if (later) throw new DomainError(`Can't create ${input.period}: a later period (${later.period}) is already finalised.`);
+  if (!(input.payDate instanceof Date) || Number.isNaN(input.payDate.getTime())) throw new DomainError("Pick the pay date.");
   if (input.payDate < start) throw new DomainError("Pay date can't be before the start of the period.");
+  // EA 1955 s.19: wages are due no later than the 7th day after the last day of the wage period.
+  const latest = new Date(parsePeriod(input.period).end.getTime() + 7 * 86400000);
+  if (input.payDate > latest) {
+    throw new DomainError(`Pay date must be on or before ${latest.toISOString().slice(0, 10)}: the Employment Act (s.19) requires wages within 7 days after the month ends.`);
+  }
   const run = await prisma.payrollRun.create({
     data: { tenantId: ctx.tenantId, companyId: input.companyId, period: input.period, payDate: input.payDate, notes: input.notes, createdById: ctx.userId },
   });
@@ -80,10 +87,32 @@ async function employeesForRun(tenantId: string, companyId: string, period: stri
   });
 }
 
+const CALC_LOCK_MS = 10 * 60_000;
+
+/**
+ * Calculates (or recalculates) every payslip in a run. Holds a lock on the run while it works, so two people
+ * pressing "Calculate" at once can't interleave (which would double-reserve claims and OT). A lock older than
+ * 10 minutes is treated as abandoned (e.g. the server restarted mid-calculation).
+ */
 export async function calculatePayrollRun(ctx: Ctx, runId: string) {
   assertCan(ctx, "payroll.manage");
   const run = await loadRun(ctx, runId);
   if (!["DRAFT", "CALCULATED"].includes(run.status)) throw new DomainError(`Can't recalculate a ${run.status.toLowerCase()} run.`);
+  await claimTransition(
+    prisma.payrollRun.updateMany({
+      where: { id: runId, status: { in: ["DRAFT", "CALCULATED"] }, OR: [{ calculatingSince: null }, { calculatingSince: { lt: new Date(Date.now() - CALC_LOCK_MS) } }] },
+      data: { calculatingSince: new Date() },
+    }),
+    "This payroll is already being calculated. Wait a moment, then refresh.",
+  );
+  try {
+    return await runCalculation(ctx, run);
+  } finally {
+    await prisma.payrollRun.updateMany({ where: { id: runId }, data: { calculatingSince: null } });
+  }
+}
+
+async function runCalculation(ctx: Ctx, run: Awaited<ReturnType<typeof loadRun>>) {
   // Scheduled salary changes whose effective date has arrived must be in place before pay is computed.
   await applyDueCompensation(ctx);
 
@@ -262,11 +291,16 @@ export async function approvePayrollRun(ctx: Ctx, runId: string) {
   const run = await loadRun(ctx, runId);
   if (run.status !== "CALCULATED") throw new DomainError("Only calculated runs can be approved.");
   if (run.createdById === ctx.userId && ctx.role !== "OWNER") throw new ForbiddenError("Maker-checker: someone other than the preparer must approve this run.");
+  if (run.calculatingSince) throw new DomainError("This payroll is being recalculated. Approve it once that finishes.");
+  const negative = await prisma.payslip.findFirst({ where: { runId, netPay: { lt: 0 } }, include: { employee: { select: { fullName: true } } } });
+  if (negative) throw new DomainError(`${negative.employee.fullName}'s net pay is negative. Reduce their deductions and recalculate before approving.`);
   const prev = await prisma.payrollRun.findUnique({ where: { companyId_period: { companyId: run.companyId, period: shiftPeriod(run.period, -1) } } });
   if (prev && !FINAL.includes(prev.status)) throw new DomainError(`Finalise ${prev.period} before approving ${run.period}.`);
   const slips = await prisma.payslip.count({ where: { runId } });
   if (slips === 0) throw new DomainError("This run has no payslips.");
-  await claimTransition(prisma.payrollRun.updateMany({ where: { id: runId, status: "CALCULATED" }, data: { status: "APPROVED", approvedById: ctx.userId, approvedAt: new Date() } }));
+  await claimTransition(
+    prisma.payrollRun.updateMany({ where: { id: runId, status: "CALCULATED", calculatingSince: null }, data: { status: "APPROVED", approvedById: ctx.userId, approvedAt: new Date() } }),
+  );
   const updated = await prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
   await audit(ctx, "APPROVE", "PayrollRun", runId, `Approved payroll ${run.period}`);
   return updated;
@@ -323,9 +357,13 @@ export async function deletePayrollRun(ctx: Ctx, runId: string) {
   assertCan(ctx, "payroll.manage");
   const run = await loadRun(ctx, runId);
   if (!["DRAFT", "CALCULATED"].includes(run.status)) throw new DomainError("Only draft or calculated runs can be deleted.");
-  await prisma.claim.updateMany({ where: { payrollRunId: runId }, data: { payrollRunId: null } });
-  await prisma.overtimeRequest.updateMany({ where: { payrollRunId: runId }, data: { payrollRunId: null } });
-  await prisma.payrollRun.delete({ where: { id: runId } });
+  if (run.calculatingSince) throw new DomainError("This payroll is being calculated. Delete it once that finishes.");
+  await prisma.$transaction(async (tx) => {
+    await tx.claim.updateMany({ where: { payrollRunId: runId }, data: { payrollRunId: null } });
+    await tx.overtimeRequest.updateMany({ where: { payrollRunId: runId }, data: { payrollRunId: null } });
+    // Only delete if it's still unapproved and not being calculated (someone may have approved it meanwhile).
+    await claimTransition(tx.payrollRun.deleteMany({ where: { id: runId, status: { in: ["DRAFT", "CALCULATED"] }, calculatingSince: null } }));
+  });
   await audit(ctx, "DELETE", "PayrollRun", runId, `Deleted payroll ${run.period}`);
 }
 
@@ -342,7 +380,21 @@ export async function addAdjustment(ctx: Ctx, input: { employeeId: string; payIt
   if (item.system) throw new DomainError(`${item.name} is managed automatically.`);
   const locked = await prisma.payrollRun.findFirst({ where: { companyId: emp.companyId, period: input.period, status: { in: FINAL } } });
   if (locked) throw new DomainError(`Payroll for ${input.period} is already ${locked.status.toLowerCase()}.`);
-  return prisma.payrollAdjustment.create({ data: { tenantId: ctx.tenantId, ...input, amount: round2(input.amount) } });
+  const adj = await prisma.payrollAdjustment.create({ data: { tenantId: ctx.tenantId, ...input, amount: round2(input.amount) } });
+  const stale = await invalidateCalculatedRuns(ctx.tenantId, { companyId: emp.companyId, periods: [input.period] });
+  return { adjustment: adj, recalculate: stale };
+}
+
+/** Removes a one-off adjustment, unless its payroll is already finalised (then it's part of the paid record). */
+export async function removeAdjustment(ctx: Ctx, id: string) {
+  assertCan(ctx, "payroll.manage");
+  const adj = await prisma.payrollAdjustment.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: { select: { companyId: true, fullName: true } } } });
+  if (!adj) throw new DomainError("That adjustment no longer exists.");
+  const locked = await prisma.payrollRun.findFirst({ where: { companyId: adj.employee.companyId, period: adj.period, status: { in: FINAL } } });
+  if (locked) throw new DomainError(`Payroll for ${adj.period} is already ${locked.status.toLowerCase()}, so this adjustment is part of the paid record. Reverse it with a new adjustment in an open month.`);
+  await prisma.payrollAdjustment.delete({ where: { id } });
+  await audit(ctx, "DELETE", "PayrollAdjustment", id, `Removed RM${adj.amount} adjustment for ${adj.employee.fullName} (${adj.period})`);
+  return invalidateCalculatedRuns(ctx.tenantId, { companyId: adj.employee.companyId, periods: [adj.period] });
 }
 
 export function currentPeriod() {

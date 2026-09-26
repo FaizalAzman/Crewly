@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { DomainError } from "../types";
+import { claimTransition } from "../guard";
 import { bootstrapTenant } from "./bootstrap.service";
 import { createHash, randomBytes } from "node:crypto";
 import { appUrl, sendMail } from "./mail.service";
@@ -115,7 +116,9 @@ export async function resetPassword(token: string, newPassword: string) {
   const row = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true } });
   if (!row || row.usedAt || row.expiresAt < new Date()) throw new DomainError("This link is invalid or has expired. Request a new one.");
   if (!row.user.active) throw new DomainError("This account is disabled.");
-  await prisma.user.update({ where: { id: row.userId }, data: { passwordHash: await hashPassword(newPassword) } });
+  // Spend the token first (compare-and-set), so the same link can't be used twice at once.
+  await claimTransition(prisma.passwordResetToken.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: new Date() } }), "This link has already been used. Request a new one.");
+  await prisma.user.update({ where: { id: row.userId }, data: { passwordHash: await hashPassword(newPassword), sessionVersion: { increment: 1 } } });
   await prisma.passwordResetToken.updateMany({ where: { userId: row.userId, usedAt: null }, data: { usedAt: new Date() } });
   await prisma.auditLog.create({ data: { tenantId: row.user.tenantId, userId: row.userId, userName: row.user.name, action: "UPDATE", entity: "User", entityId: row.userId, summary: `${row.user.name} ${row.purpose === "INVITE" ? "accepted an invitation" : "reset their password"}` } });
   return row.user;

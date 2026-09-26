@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { approveSeparation, completeSeparation, createSeparation, markCp22a, previewSeparation, toggleTask, withdrawSeparation, addTask, checklistProgress } from "@/server/services/lifecycle.service";
 import { assignAsset, returnAsset } from "@/server/services/relations.service";
-import { D, makeWorld, type World } from "./factory";
+import { D, makeWorld, nric, type World } from "./factory";
 
 let w: World;
 beforeAll(async () => {
@@ -112,7 +112,8 @@ describe("Separation workflow", () => {
 
   it("retrenchment completes as TERMINATED, retirement as RETIRED", async () => {
     for (const [type, status] of [["RETRENCHMENT", "TERMINATED"], ["RETIREMENT", "RETIRED"]] as const) {
-      const e = await w.emp();
+      // Retirement is only lawful from age 60 (born 1965 → 61 on the last working day).
+      const e = await w.emp(type === "RETIREMENT" ? { icNo: nric("650101") } : {});
       const s = await createSeparation(w.hr, { employeeId: e.id, type, noticeDate: D("2026-06-01"), lastWorkingDate: D("2026-08-31") });
       await approveSeparation(w.hr, s.id);
       await markCp22a(w.hr, s.id);

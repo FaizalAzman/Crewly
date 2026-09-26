@@ -3,6 +3,7 @@ import { MAX_SUSPENSION_DAYS } from "@/lib/statutory/employment-act";
 import { addDays, daysBetween, todayMY } from "@/lib/utils";
 import { assertActOnEmployee, assertCan, audit, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
+import { nextSequence } from "./sequence.service";
 
 // ───────────── Disciplinary ─────────────
 
@@ -15,11 +16,16 @@ export const DISCIPLINARY_STAGES = ["REPORTED", "INVESTIGATION", "SHOW_CAUSE", "
  */
 export async function openCase(ctx: Ctx, input: { employeeId: string; category: string; severity: string; incidentDate: Date; description: string }) {
   assertCan(ctx, "er.manage");
+  if (input.employeeId === ctx.employeeId) throw new DomainError("You can't open a disciplinary case against yourself.");
+  await assertActOnEmployee(ctx, input.employeeId, "er.manage");
+  if (!["MISCONDUCT", "ATTENDANCE", "PERFORMANCE", "HARASSMENT", "FRAUD", "SAFETY", "OTHER"].includes(input.category)) throw new DomainError("Pick a category.");
+  if (!["MINOR", "MAJOR", "GROSS"].includes(input.severity)) throw new DomainError("Pick a severity.");
+  if (!(input.incidentDate instanceof Date) || Number.isNaN(input.incidentDate.getTime())) throw new DomainError("Enter the incident date.");
   if (input.incidentDate > todayMY()) throw new DomainError("Incident date can't be in the future.");
   if (!input.description?.trim()) throw new DomainError("Describe the incident.");
-  const count = await prisma.disciplinaryCase.count({ where: { tenantId: ctx.tenantId } });
+  const n = await nextSequence(ctx.tenantId, "disciplinary", () => prisma.disciplinaryCase.count({ where: { tenantId: ctx.tenantId } }));
   const c = await prisma.disciplinaryCase.create({
-    data: { tenantId: ctx.tenantId, caseNo: `DC-${new Date().getUTCFullYear()}-${String(count + 1).padStart(3, "0")}`, ...input },
+    data: { tenantId: ctx.tenantId, caseNo: `DC-${new Date().getUTCFullYear()}-${String(n).padStart(3, "0")}`, ...input },
   });
   await audit(ctx, "CREATE", "DisciplinaryCase", c.id, `Opened ${c.caseNo}`);
   return c;
@@ -105,12 +111,12 @@ export async function fileGrievance(ctx: Ctx, input: { employeeId?: string | nul
   if (input.category === "SEXUAL_HARASSMENT" && input.anonymous) {
     throw new DomainError("Sexual harassment complaints can't be anonymous — the law requires an inquiry with the complainant. Your identity stays confidential.");
   }
-  const count = await prisma.grievance.count({ where: { tenantId: ctx.tenantId } });
+  const n = await nextSequence(ctx.tenantId, "grievance", () => prisma.grievance.count({ where: { tenantId: ctx.tenantId } }));
   const now = todayMY();
   const g = await prisma.grievance.create({
     data: {
       tenantId: ctx.tenantId,
-      refNo: `GR-${now.getUTCFullYear()}-${String(count + 1).padStart(3, "0")}`,
+      refNo: `GR-${now.getUTCFullYear()}-${String(n).padStart(3, "0")}`,
       employeeId: input.anonymous ? null : input.employeeId ?? ctx.employeeId,
       anonymous: input.anonymous,
       category: input.category,

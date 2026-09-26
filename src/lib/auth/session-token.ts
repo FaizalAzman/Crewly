@@ -7,6 +7,8 @@ export interface SessionPayload {
   uid: string;
   tid: string;
   role: string;
+  /** User.sessionVersion when issued; bumping it revokes every older session. Missing on pre-revocation tokens (= 0). */
+  sv?: number;
 }
 
 function secret() {
@@ -28,7 +30,7 @@ export async function verifySession(token: string | undefined | null): Promise<S
   try {
     const { payload } = await jwtVerify(token, secret());
     if (typeof payload.uid !== "string" || typeof payload.tid !== "string") return null;
-    return { uid: payload.uid, tid: payload.tid, role: String(payload.role ?? "EMPLOYEE") };
+    return { uid: payload.uid, tid: payload.tid, role: String(payload.role ?? "EMPLOYEE"), sv: typeof payload.sv === "number" ? payload.sv : 0 };
   } catch {
     return null;
   }

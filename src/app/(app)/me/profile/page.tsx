@@ -4,13 +4,13 @@ import { prisma } from "@/lib/db";
 import { act } from "@/server/action";
 import { updateOwnProfile } from "@/server/services/employee.service";
 import { ActionForm, FormModal, SubmitButton } from "@/components/forms";
-import { Callout, Card, CardBody, CardHeader, Checkbox, Field, Input, KV, PageHeader, Select, Table, TD, TH, THead, TR } from "@/components/ui";
+import { btnClass, Callout, Card, CardBody, CardHeader, Checkbox, Field, Input, KV, PageHeader, Select, Table, TD, TH, THead, TR } from "@/components/ui";
 import { BANKS, STATES, humanize, stateName } from "@/lib/constants";
 import { ageOn, fmtDate, optStr, rm, str, todayMY } from "@/lib/utils";
 import { maskNric } from "@/lib/nric";
 import { childReliefTotal, pcbCategory } from "@/lib/statutory/pcb";
 import type { ActionState } from "@/server/types";
-import { changePasswordAction } from "../../settings/actions";
+import { changePasswordAction, logOutEverywhereAction } from "../../settings/actions";
 import { addChildAction } from "../../employees/actions";
 
 export const metadata: Metadata = { title: "My profile" };
@@ -148,6 +148,12 @@ export default async function MyProfilePage() {
                 <Field label="Confirm new password"><Input type="password" name="confirm" required minLength={8} autoComplete="new-password" /></Field>
                 <SubmitButton className="w-full">Change password</SubmitButton>
               </ActionForm>
+              <form action={logOutEverywhereAction} className="mt-4 border-t-2 border-soft-line pt-4">
+                <p className="mb-2 text-xs text-muted">Lost a phone or used a shared computer? End every session, including this one.</p>
+                <button type="submit" className={btnClass("secondary", "sm")}>
+                  Log out of all devices
+                </button>
+              </form>
             </CardBody>
           </Card>
           <Callout emoji="🛡️">Under PDPA 2010 you may request access to, or correction of, any personal data we hold. Use the helpdesk for anything you can&apos;t edit here.</Callout>

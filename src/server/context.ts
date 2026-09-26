@@ -20,6 +20,8 @@ export const getSessionUser = cache(async () => {
     include: { tenant: true, customRole: true, employee: { select: { id: true, fullName: true, avatarColor: true, jobTitle: true } } },
   });
   if (!user || !user.active || user.tenantId !== payload.tid) return null;
+  // Password change, admin reset, deactivation or "log out everywhere" bumps the version and revokes older sessions.
+  if ((payload.sv ?? 0) !== user.sessionVersion) return null;
   // Suspended or closed workspaces lose access immediately (operators keep theirs).
   if (!tenantAccess(user.tenant).canLogin && !user.platformAdmin) return null;
   return user;

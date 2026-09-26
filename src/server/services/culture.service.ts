@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { fmtDate, rm } from "@/lib/utils";
-import { assertCan, audit, notifyEmployee } from "../guard";
+import { assertCan, audit, claimTransition, notifyEmployee } from "../guard";
 import { can } from "@/lib/permissions";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
+import { nextSequence } from "./sequence.service";
 
 // ───────────── Letters (merge fields) ─────────────
 
@@ -63,7 +64,9 @@ export async function updateLetter(ctx: Ctx, id: string, content: string, title?
   if (l.status !== "DRAFT") throw new DomainError("Issued letters can't be edited. Generate a new one instead.");
   if (!content.trim()) throw new DomainError("The letter can't be empty.");
   if (/\[missing: /.test(content)) throw new DomainError("Fill in the [missing: …] fields before saving.");
-  return prisma.generatedLetter.update({ where: { id }, data: { content, title: title?.trim() || l.title } });
+  // Only while still a draft: an edit racing an "Issue" must not change the issued text.
+  await claimTransition(prisma.generatedLetter.updateMany({ where: { id, status: "DRAFT" }, data: { content, title: title?.trim() || l.title } }), "This letter was issued in the meantime, so it can't be edited.");
+  return prisma.generatedLetter.findUniqueOrThrow({ where: { id } });
 }
 
 /** Issue: freezes the content, notifies the employee and shows it in their Me → Documents. */
@@ -73,7 +76,8 @@ export async function issueLetter(ctx: Ctx, id: string) {
   if (l.status !== "DRAFT") throw new DomainError("This letter has already been issued.");
   const left = unresolvedPlaceholders(l.content);
   if (left.length) throw new DomainError(`Complete the placeholders before issuing: ${left.join(", ")}`);
-  const updated = await prisma.generatedLetter.update({ where: { id }, data: { status: "ISSUED", issuedAt: new Date(), issuedBy: ctx.userName } });
+  await claimTransition(prisma.generatedLetter.updateMany({ where: { id, status: "DRAFT", content: l.content }, data: { status: "ISSUED", issuedAt: new Date(), issuedBy: ctx.userName } }), "This letter changed or was issued in the meantime. Refresh and check it before issuing.");
+  const updated = await prisma.generatedLetter.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(l.employeeId, `You have a new letter: ${l.title.split(" — ")[0]}`, "Please read and acknowledge it.", "/me/documents");
   await audit(ctx, "UPDATE", "Letter", id, `Issued "${l.title}"`);
   return updated;
@@ -83,14 +87,15 @@ export async function acknowledgeLetter(ctx: Ctx, id: string) {
   const l = await loadLetter(ctx, id);
   if (l.employeeId !== ctx.employeeId) throw new ForbiddenError("Only the recipient can acknowledge this letter.");
   if (l.status !== "ISSUED") throw new DomainError(l.status === "ACKNOWLEDGED" ? "Already acknowledged." : "This letter hasn't been issued yet.");
-  return prisma.generatedLetter.update({ where: { id }, data: { status: "ACKNOWLEDGED", acknowledgedAt: new Date() } });
+  await claimTransition(prisma.generatedLetter.updateMany({ where: { id, status: "ISSUED" }, data: { status: "ACKNOWLEDGED", acknowledgedAt: new Date() } }), "Already acknowledged.");
+  return prisma.generatedLetter.findUniqueOrThrow({ where: { id } });
 }
 
 export async function deleteLetter(ctx: Ctx, id: string) {
   assertCan(ctx, "documents.manage");
   const l = await loadLetter(ctx, id);
   if (l.status !== "DRAFT") throw new DomainError("Issued letters are part of the employee record and can't be deleted.");
-  await prisma.generatedLetter.delete({ where: { id } });
+  await claimTransition(prisma.generatedLetter.deleteMany({ where: { id, status: "DRAFT" } }), "This letter was issued in the meantime, so it's now part of the employee record.");
 }
 
 /** Who may read a letter: document managers, or the recipient once it's issued. */
@@ -184,9 +189,9 @@ export async function openTicket(ctx: Ctx, input: { category: string; subject: s
   if (!input.subject.trim() || !input.description.trim()) throw new DomainError("Subject and description are required.");
   if (!TICKET_CATEGORIES.includes(input.category)) throw new DomainError("Pick a category.");
   if (!TICKET_PRIORITIES.includes(input.priority)) throw new DomainError("Pick a priority.");
-  const count = await prisma.ticket.count({ where: { tenantId: ctx.tenantId } });
+  const n = await nextSequence(ctx.tenantId, "ticket", () => prisma.ticket.count({ where: { tenantId: ctx.tenantId } }));
   return prisma.ticket.create({
-    data: { tenantId: ctx.tenantId, refNo: `HR-${String(count + 1001)}`, employeeId: ctx.employeeId, ...input },
+    data: { tenantId: ctx.tenantId, refNo: `HR-${String(n + 1000)}`, employeeId: ctx.employeeId, ...input },
   });
 }
 

@@ -5,6 +5,7 @@ import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
 import {
   addAdjustment,
+  removeAdjustment,
   approvePayrollRun,
   calculatePayrollRun,
   createPayrollRun,
@@ -13,7 +14,6 @@ import {
   markPayrollPaid,
   reopenPayrollRun,
 } from "@/server/services/payroll.service";
-import { prisma } from "@/lib/db";
 import { DomainError, type ActionState } from "@/server/types";
 import { dateField, numField, optStr, str } from "@/lib/utils";
 
@@ -69,17 +69,15 @@ export async function adjustmentAction(_: ActionState, fd: FormData): Promise<Ac
   const ctx = await requireCtx("payroll.manage");
   const runId = optStr(fd, "runId");
   return act(async () => {
-    await addAdjustment(ctx, { employeeId: str(fd, "employeeId"), payItemId: str(fd, "payItemId"), period: str(fd, "period"), amount: numField(fd, "amount"), note: optStr(fd, "note") ?? undefined });
-    return "Adjustment added. Recalculate the run to apply it.";
+    const { recalculate } = await addAdjustment(ctx, { employeeId: str(fd, "employeeId"), payItemId: str(fd, "payItemId"), period: str(fd, "period"), amount: numField(fd, "amount"), note: optStr(fd, "note") ?? undefined });
+    return recalculate.length ? `Adjustment added. Payroll ${recalculate.join(", ")} went back to draft: recalculate it before approving.` : "Adjustment added. It will be included when the payroll is calculated.";
   }, ["/payroll", ...(runId ? [`/payroll/${runId}`] : [])]);
 }
 
 export async function removeAdjustmentAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireCtx("payroll.manage");
   return act(async () => {
-    const adj = await prisma.payrollAdjustment.findFirst({ where: { id: str(fd, "id"), tenantId: ctx.tenantId } });
-    if (!adj) throw new DomainError("Not found");
-    await prisma.payrollAdjustment.delete({ where: { id: adj.id } });
-    return "Removed";
+    const stale = await removeAdjustment(ctx, str(fd, "id"));
+    return stale.length ? `Removed. Recalculate payroll ${stale.join(", ")} before approving.` : "Removed";
   }, ["/payroll"]);
 }

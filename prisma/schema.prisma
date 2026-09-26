@@ -59,6 +59,7 @@ model User {
   employeeId   String?   @unique
   employee     Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   active       Boolean   @default(true)
+  sessionVersion Int     @default(0) // bumped to revoke every session (password change, "log out everywhere", deactivation)
   platformAdmin Boolean  @default(false) // Crewly operator (cross-tenant console)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
@@ -81,6 +82,16 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// Per-tenant counters for human-readable reference numbers (tickets, grievances, cases, invoices).
+model Sequence {
+  id       String @id @default(cuid())
+  tenantId String
+  key      String // e.g. "ticket", "grievance:2026"
+  value    Int
+
+  @@unique([tenantId, key])
 }
 
 /// Outbound email log. The mailer writes every message here (and sends via SMTP when configured).
@@ -664,6 +675,7 @@ model PayrollRun {
   totalZakat    Float     @default(0)
   totalHrdf     Float     @default(0)
   notes         String?
+  calculatingSince DateTime? // lock held while a calculation runs; stale after 10 minutes
   createdById   String?
   approvedById  String?
   approvedAt    DateTime?

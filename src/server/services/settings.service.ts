@@ -81,8 +81,9 @@ export async function resetUserPassword(ctx: Ctx, userId: string, password: stri
   if (!user) throw new DomainError("User not found.");
   if (user.role === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can reset an owner's password.");
   if (password.length < 8) throw new DomainError("Password must be at least 8 characters.");
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(password) } });
-  await audit(ctx, "UPDATE", "User", userId, `Reset password for ${user.name}`);
+  // The old password may be compromised, so every existing session for this user ends.
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(password), sessionVersion: { increment: 1 } } });
+  await audit(ctx, "UPDATE", "User", userId, `Reset password for ${user.name} (signed out everywhere)`);
 }
 
 /** Self-service password change. */
@@ -91,8 +92,16 @@ export async function changeOwnPassword(ctx: Ctx, current: string, next: string)
   if (!(await verifyPassword(current, user.passwordHash))) throw new DomainError("Your current password is incorrect.");
   if (next.length < 8) throw new DomainError("New password must be at least 8 characters.");
   if (next === current) throw new DomainError("Choose a different password.");
-  await prisma.user.update({ where: { id: ctx.userId }, data: { passwordHash: await hashPassword(next) } });
-  await audit(ctx, "UPDATE", "User", ctx.userId, "Changed own password");
+  // Other devices are signed out; the caller re-issues this browser's session with the returned user.
+  const updated = await prisma.user.update({ where: { id: ctx.userId }, data: { passwordHash: await hashPassword(next), sessionVersion: { increment: 1 } } });
+  await audit(ctx, "UPDATE", "User", ctx.userId, "Changed own password (other sessions signed out)");
+  return updated;
+}
+
+/** Ends every session of the current user, on every device (e.g. after losing a phone). */
+export async function logOutEverywhere(ctx: Ctx) {
+  await prisma.user.update({ where: { id: ctx.userId }, data: { sessionVersion: { increment: 1 } } });
+  await audit(ctx, "UPDATE", "User", ctx.userId, "Signed out of all devices");
 }
 
 export async function setUserActive(ctx: Ctx, userId: string, active: boolean) {
@@ -105,7 +114,7 @@ export async function setUserActive(ctx: Ctx, userId: string, active: boolean) {
     if (owners <= 1) throw new DomainError("Can't deactivate the last owner.");
     if (ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can deactivate another owner.");
   }
-  await prisma.user.update({ where: { id: userId }, data: { active } });
+  await prisma.user.update({ where: { id: userId }, data: { active, ...(active ? {} : { sessionVersion: { increment: 1 } }) } });
   await audit(ctx, "UPDATE", "User", userId, `${active ? "Reactivated" : "Deactivated"} ${user.name}`);
 }
 

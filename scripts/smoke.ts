@@ -12,7 +12,7 @@ const base = process.argv[3] ?? "http://localhost:3000";
 
 async function main() {
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-  const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role });
+  const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role, sv: user.sessionVersion });
   const emp = await prisma.employee.findFirst({ where: { tenantId: user.tenantId }, orderBy: { employeeNo: "asc" } });
   const run = await prisma.payrollRun.findFirst({ where: { tenantId: user.tenantId }, orderBy: { period: "desc" }, include: { payslips: { take: 1 } } });
   const job = await prisma.jobOpening.findFirst({ where: { tenantId: user.tenantId } });

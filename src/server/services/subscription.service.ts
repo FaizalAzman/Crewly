@@ -3,6 +3,7 @@ import { round2 } from "@/lib/utils";
 import { assertCan, audit } from "../guard";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { sendMail } from "./mail.service";
+import { nextSequence } from "./sequence.service";
 
 export const PLANS = {
   STARTER: { name: "Starter", price: 6, maxEmployees: 25, multiEntity: false },
@@ -145,12 +146,12 @@ export async function checkout(ctx: Ctx, input: { plan: PlanKey; cycle: "MONTHLY
   const end = new Date(base);
   if (input.cycle === "YEARLY") end.setUTCFullYear(end.getUTCFullYear() + 1);
   else end.setUTCMonth(end.getUTCMonth() + 1);
-  const count = await prisma.invoice.count({ where: { tenantId: ctx.tenantId } });
+  const n = await nextSequence(ctx.tenantId, "invoice", () => prisma.invoice.count({ where: { tenantId: ctx.tenantId } }));
   const period = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   const invoice = await prisma.invoice.create({
     data: {
       tenantId: ctx.tenantId,
-      number: `INV-${now.getUTCFullYear()}-${tenant.slug.slice(0, 6).toUpperCase()}-${String(count + 1).padStart(4, "0")}`,
+      number: `INV-${now.getUTCFullYear()}-${tenant.slug.slice(0, 6).toUpperCase()}-${String(n).padStart(4, "0")}`,
       period,
       seats: q.seats,
       amount: q.subtotal,

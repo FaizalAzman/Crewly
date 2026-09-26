@@ -3,9 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
-import { changeOwnPassword, changePlan, changeUserRole, closeWorkspace, inviteUser, resetUserPassword, setUserActive, updateWorkspace } from "@/server/services/settings.service";
+import { changeOwnPassword, changePlan, logOutEverywhere, changeUserRole, closeWorkspace, inviteUser, resetUserPassword, setUserActive, updateWorkspace } from "@/server/services/settings.service";
 import { cancelSubscription, checkout, type PlanKey } from "@/server/services/subscription.service";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
+import { SESSION_COOKIE } from "@/lib/auth/session-token";
+import { startSession } from "@/server/session";
 import { deleteCustomRole, saveCustomRole } from "@/server/services/roles.service";
 import { numField, optStr, str } from "@/lib/utils";
 import { DomainError, type ActionState } from "@/server/types";
@@ -96,9 +99,18 @@ export async function changePasswordAction(_: ActionState, fd: FormData): Promis
   const ctx = await requireCtx();
   return act(async () => {
     if (str(fd, "next") !== str(fd, "confirm")) throw new DomainError("New passwords don't match.");
-    await changeOwnPassword(ctx, str(fd, "current"), str(fd, "next"));
-    return "Password changed 🔐";
+    const user = await changeOwnPassword(ctx, str(fd, "current"), str(fd, "next"));
+    await startSession(user); // keep this browser signed in; every other device is signed out
+    return "Password changed 🔐 Other devices have been signed out.";
   });
+}
+
+/** Signs this user out on every device, including this one. */
+export async function logOutEverywhereAction(): Promise<void> {
+  const ctx = await requireCtx();
+  await logOutEverywhere(ctx);
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect("/login");
 }
 
 export async function checkoutAction(_: ActionState, fd: FormData): Promise<ActionState> {
