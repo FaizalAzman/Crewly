@@ -13,6 +13,8 @@ npm run db:seed           # demo company "Lumen Digital Sdn Bhd"
 npm run dev               # http://localhost:3000
 ```
 
+After pulling changes that touch `prisma/schema.prisma`, run `npx prisma db push` to update your database. `npm install`, `npm run build` and `npm run typecheck` regenerate the Prisma client automatically, so the code never compiles against stale types.
+
 To open it from a phone on the same Wi-Fi, use `http://<your-LAN-IP>:3000`. `next.config.ts` allows LAN origins in development.
 
 ### Demo accounts (password `demo1234`)
