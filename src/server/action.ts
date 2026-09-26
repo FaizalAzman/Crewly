@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { ZodError } from "zod";
+import { Prisma } from "@prisma/client";
 import { DomainError, type ActionState } from "./types";
 import { getSessionUser } from "./context";
 import { tenantAccess } from "./services/subscription.service";
@@ -33,6 +34,12 @@ export async function act(
     unstable_rethrow(e);
     if (e instanceof DomainError) return { ok: false, error: e.message };
     if (e instanceof ZodError) return { ok: false, error: e.issues.map((i) => `${i.path.join(".") || "field"}: ${i.message}`).join("; ") };
+    // Known Prisma failures are user-facing conditions, not server faults.
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === "P2025") return { ok: false, error: "That record no longer exists. Refresh the page." };
+      if (e.code === "P2002") return { ok: false, error: "That already exists. Use a different value." };
+      if (e.code === "P2003") return { ok: false, error: "That record is still in use elsewhere, so it can't be changed." };
+    }
     console.error(e);
     return { ok: false, error: "Something went wrong on our side. Please try again." };
   }

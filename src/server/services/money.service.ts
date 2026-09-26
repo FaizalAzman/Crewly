@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
-import { parsePeriod, periodOf, round2, todayMY, utcDate } from "@/lib/utils";
-import { assertCan, assertCanApproveFor, audit, notifyEmployee } from "../guard";
+import { parsePeriod, periodOf, round2, shiftPeriod, todayMY, utcDate } from "@/lib/utils";
+import { assertActOnEmployee, assertCan, assertCanApproveFor, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
 
 // ───────────── Claims ─────────────
@@ -31,7 +31,8 @@ export async function claimUsage(employeeId: string, claimTypeId: string, date: 
 }
 
 export async function submitClaim(ctx: Ctx, input: ClaimInput) {
-  if (input.employeeId !== ctx.employeeId) assertCan(ctx, "claims.approve");
+  const emp = await assertActOnEmployee(ctx, input.employeeId, "claims.approve");
+  if (["RESIGNED", "TERMINATED", "RETIRED"].includes(emp.status)) throw new DomainError("Former employees can't submit claims.");
   const [type, tenant] = await Promise.all([
     prisma.claimType.findFirst({ where: { id: input.claimTypeId, tenantId: ctx.tenantId, active: true } }),
     prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } }),
@@ -39,6 +40,7 @@ export async function submitClaim(ctx: Ctx, input: ClaimInput) {
   if (!type) throw new DomainError("Claim type not available.");
   if (!input.description?.trim()) throw new DomainError("Please describe what this claim is for.");
   if (input.date > todayMY()) throw new DomainError("Claims can't be dated in the future.");
+  if (input.date < emp.joinDate) throw new DomainError("The expense is dated before the employee joined.");
   const ageDays = (todayMY().getTime() - input.date.getTime()) / 86400000;
   if (ageDays > 90) throw new DomainError("Claims must be submitted within 90 days of the expense.");
 
@@ -75,7 +77,6 @@ export async function submitClaim(ctx: Ctx, input: ClaimInput) {
       receiptUrl: input.receiptUrl ?? null,
     },
   });
-  const emp = await prisma.employee.findUniqueOrThrow({ where: { id: input.employeeId } });
   if (emp.managerId) await notifyEmployee(emp.managerId, `${emp.preferredName ?? emp.fullName} submitted a ${type.name} claim`, `RM${amount}`, "/approvals");
   return claim;
 }
@@ -86,10 +87,13 @@ export async function decideClaim(ctx: Ctx, id: string, approve: boolean, note?:
   await assertCanApproveFor(ctx, c.employeeId, "claims.approve");
   if (c.status !== "PENDING") throw new DomainError(`Already ${c.status.toLowerCase()}.`);
   if (!approve && !note?.trim()) throw new DomainError("Please give a reason when rejecting a claim.");
-  const updated = await prisma.claim.update({
-    where: { id },
-    data: { status: approve ? "APPROVED" : "REJECTED", approverId: ctx.userId, approverNote: note ?? null, decidedAt: new Date() },
-  });
+  await claimTransition(
+    prisma.claim.updateMany({
+      where: { id, status: "PENDING" },
+      data: { status: approve ? "APPROVED" : "REJECTED", approverId: ctx.userId, approverNote: note ?? null, decidedAt: new Date() },
+    }),
+  );
+  const updated = await prisma.claim.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(c.employeeId, `Your ${c.claimType.name} claim (RM${c.amount}) was ${approve ? "approved ✅" : "rejected"}`, note, "/me/claims");
   await audit(ctx, approve ? "APPROVE" : "REJECT", "Claim", id, `${approve ? "Approved" : "Rejected"} RM${c.amount} ${c.claimType.name} for ${c.employee.fullName}`);
   return updated;
@@ -100,7 +104,7 @@ export async function cancelClaim(ctx: Ctx, id: string) {
   if (!c) throw new DomainError("Claim not found.");
   if (c.employeeId !== ctx.employeeId) assertCan(ctx, "claims.approve");
   if (c.status !== "PENDING") throw new DomainError("Only pending claims can be withdrawn.");
-  await prisma.claim.delete({ where: { id } });
+  await claimTransition(prisma.claim.deleteMany({ where: { id, status: "PENDING" } }), "This claim was decided in the meantime and can't be withdrawn.");
 }
 
 // ───────────── Loans & advances ─────────────
@@ -113,6 +117,8 @@ export interface LoanInput {
   startPeriod: string;
   reason?: string;
 }
+
+export const LOAN_TYPES: LoanInput["type"][] = ["SALARY_ADVANCE", "STAFF_LOAN", "EDUCATION_LOAN"];
 
 /** Number of instalments needed and the final instalment. */
 export function loanSchedule(principal: number, installment: number, startPeriod: string) {
@@ -133,9 +139,10 @@ export function loanSchedule(principal: number, installment: number, startPeriod
 }
 
 export async function requestLoan(ctx: Ctx, input: LoanInput) {
-  if (input.employeeId !== ctx.employeeId) assertCan(ctx, "loans.manage");
-  const emp = await prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } });
-  if (!emp) throw new DomainError("Employee not found.");
+  const emp = await assertActOnEmployee(ctx, input.employeeId, "loans.manage");
+  if (!LOAN_TYPES.includes(input.type)) throw new DomainError("Unknown loan type.");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.startPeriod ?? "")) throw new DomainError("Pick the first repayment month.");
+  if (["RESIGNED", "TERMINATED", "RETIRED"].includes(emp.status)) throw new DomainError("Former employees can't request loans.");
   if (emp.status === "PROBATION" && input.type !== "SALARY_ADVANCE") throw new DomainError("Staff loans are available after confirmation.");
   if (emp.status === "NOTICE") throw new DomainError("Loans aren't available during the notice period.");
   if (input.principal <= 0 || input.installment <= 0) throw new DomainError("Amount and instalment must be positive.");
@@ -162,7 +169,9 @@ export async function decideLoan(ctx: Ctx, id: string, approve: boolean) {
   assertCan(ctx, "loans.manage");
   await assertCanApproveFor(ctx, loan.employeeId, "loans.manage");
   if (loan.status !== "PENDING") throw new DomainError(`Already ${loan.status.toLowerCase()}.`);
-  const updated = await prisma.loan.update({ where: { id }, data: { status: approve ? "ACTIVE" : "REJECTED", approverId: ctx.userId } });
+  if (approve && ["RESIGNED", "TERMINATED", "RETIRED", "NOTICE"].includes(loan.employee.status)) throw new DomainError("This employee is leaving, so the loan can't be approved.");
+  await claimTransition(prisma.loan.updateMany({ where: { id, status: "PENDING" }, data: { status: approve ? "ACTIVE" : "REJECTED", approverId: ctx.userId } }));
+  const updated = await prisma.loan.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(loan.employeeId, `Your ${loan.type.toLowerCase().replace(/_/g, " ")} of RM${loan.principal} was ${approve ? "approved" : "rejected"}`);
   await audit(ctx, approve ? "APPROVE" : "REJECT", "Loan", id, `${approve ? "Approved" : "Rejected"} loan RM${loan.principal} for ${loan.employee.fullName}`);
   return updated;
@@ -200,43 +209,101 @@ export async function proposeCompensation(
   return { change, warnings };
 }
 
-/** Approve & apply: updates salary/title, writes history, and for bonuses creates a payroll adjustment. */
-export async function approveCompensation(ctx: Ctx, id: string) {
+const FINAL_RUN = ["APPROVED", "PAID", "LOCKED"];
+
+/** First payroll period on/after `from` that isn't finalised for the company, so a new adjustment will actually be paid. */
+export async function firstOpenPeriod(companyId: string, from: string) {
+  const closed = new Set(
+    (await prisma.payrollRun.findMany({ where: { companyId, period: { gte: from }, status: { in: FINAL_RUN } }, select: { period: true } })).map((r) => r.period),
+  );
+  let period = from;
+  while (closed.has(period)) period = shiftPeriod(period, 1);
+  return period;
+}
+
+type ChangeRow = NonNullable<Awaited<ReturnType<typeof prisma.compensationChange.findFirst<{ include: { employee: true } }>>>>;
+
+/** Applies a change exactly once (compare-and-set on its status), with its salary/bonus side effects in one transaction. */
+async function applyCompensationChange(ctx: Ctx, c: ChangeRow, from: "PENDING" | "APPROVED") {
+  let paidIn: string | null = null;
+  let bonusItemId: string | null = null;
+  if (c.type === "BONUS") {
+    const bonus = await prisma.payItem.findFirst({ where: { tenantId: ctx.tenantId, code: "BONUS" } });
+    if (!bonus) throw new DomainError("BONUS pay item is missing.");
+    bonusItemId = bonus.id;
+    // A bonus dated into a finalised payroll would never be paid, so it rolls into the next open period.
+    paidIn = await firstOpenPeriod(c.employee.companyId, periodOf(c.effectiveDate));
+  }
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(tx.compensationChange.updateMany({ where: { id: c.id, status: from }, data: { status: "APPLIED" } }));
+    if (bonusItemId && paidIn) {
+      await tx.payrollAdjustment.create({
+        data: { tenantId: ctx.tenantId, employeeId: c.employeeId, payItemId: bonusItemId, period: paidIn, amount: c.bonusAmount, note: c.reason ?? "Bonus" },
+      });
+    } else {
+      await tx.employee.update({ where: { id: c.employeeId }, data: { basicSalary: c.newSalary, ...(c.newTitle ? { jobTitle: c.newTitle } : {}) } });
+      const pct = c.oldSalary ? round2(((c.newSalary - c.oldSalary) / c.oldSalary) * 100) : 0;
+      await tx.employmentHistory.create({
+        data: {
+          employeeId: c.employeeId,
+          effectiveDate: c.effectiveDate,
+          type: c.type,
+          title: c.newTitle ? `${c.type === "PROMOTION" ? "Promoted" : "Redesignated"} to ${c.newTitle}` : `Salary revised (${pct >= 0 ? "+" : ""}${pct}%)`,
+          details: `RM${c.oldSalary.toLocaleString()} → RM${c.newSalary.toLocaleString()}`,
+        },
+      });
+    }
+  });
+  await notifyEmployee(c.employeeId, c.type === "BONUS" ? `A bonus of RM${c.bonusAmount} is coming your way 🎉` : "Your compensation has been updated 🎉");
+  await audit(ctx, "APPROVE", "Compensation", c.id, `Applied ${c.type} for ${c.employee.fullName}${paidIn && paidIn !== periodOf(c.effectiveDate) ? ` (paid in ${paidIn}: ${periodOf(c.effectiveDate)} payroll was already finalised)` : ""}`);
+  return paidIn;
+}
+
+/**
+ * Approve: bonuses become a payroll adjustment; salary/title changes apply now, or, when the effective date is
+ * in the future, are scheduled (APPROVED) and applied by `applyDueCompensation` once the date arrives.
+ */
+export async function approveCompensation(ctx: Ctx, id: string, opts: { today?: Date } = {}) {
   assertCan(ctx, "compensation.manage");
   const c = await prisma.compensationChange.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: true } });
   if (!c) throw new DomainError("Change not found.");
   if (c.status !== "PENDING") throw new DomainError(`Already ${c.status.toLowerCase()}.`);
   if (ctx.employeeId === c.employeeId) throw new DomainError("You can't approve your own compensation change.");
-  if (c.type === "BONUS") {
-    const bonus = await prisma.payItem.findFirst({ where: { tenantId: ctx.tenantId, code: "BONUS" } });
-    if (!bonus) throw new DomainError("BONUS pay item is missing.");
-    await prisma.payrollAdjustment.create({
-      data: { tenantId: ctx.tenantId, employeeId: c.employeeId, payItemId: bonus.id, period: periodOf(c.effectiveDate), amount: c.bonusAmount, note: c.reason ?? "Bonus" },
-    });
-  } else {
-    await prisma.employee.update({ where: { id: c.employeeId }, data: { basicSalary: c.newSalary, ...(c.newTitle ? { jobTitle: c.newTitle } : {}) } });
-    const pct = c.oldSalary ? round2(((c.newSalary - c.oldSalary) / c.oldSalary) * 100) : 0;
-    await prisma.employmentHistory.create({
-      data: {
-        employeeId: c.employeeId,
-        effectiveDate: c.effectiveDate,
-        type: c.type,
-        title: c.newTitle ? `${c.type === "PROMOTION" ? "Promoted" : "Redesignated"} to ${c.newTitle}` : `Salary revised (${pct >= 0 ? "+" : ""}${pct}%)`,
-        details: `RM${c.oldSalary.toLocaleString()} → RM${c.newSalary.toLocaleString()}`,
-      },
-    });
+  if (["RESIGNED", "TERMINATED", "RETIRED"].includes(c.employee.status)) throw new DomainError("This person has left the company.");
+  if (c.type !== "BONUS" && c.effectiveDate > (opts.today ?? todayMY())) {
+    await claimTransition(prisma.compensationChange.updateMany({ where: { id, status: "PENDING" }, data: { status: "APPROVED" } }));
+    await audit(ctx, "APPROVE", "Compensation", id, `Scheduled ${c.type} for ${c.employee.fullName} effective ${c.effectiveDate.toISOString().slice(0, 10)}`);
+    return prisma.compensationChange.findUniqueOrThrow({ where: { id } });
   }
-  const updated = await prisma.compensationChange.update({ where: { id }, data: { status: "APPLIED" } });
-  await notifyEmployee(c.employeeId, c.type === "BONUS" ? `A bonus of RM${c.bonusAmount} is coming your way 🎉` : "Your compensation has been updated 🎉");
-  await audit(ctx, "APPROVE", "Compensation", id, `Applied ${c.type} for ${c.employee.fullName}`);
-  return updated;
+  await applyCompensationChange(ctx, c, "PENDING");
+  return prisma.compensationChange.findUniqueOrThrow({ where: { id } });
+}
+
+/** Applies scheduled (approved, future-dated) salary changes whose effective date has arrived. Returns how many. */
+export async function applyDueCompensation(ctx: Ctx, today: Date = todayMY()) {
+  const due = await prisma.compensationChange.findMany({
+    where: { tenantId: ctx.tenantId, status: "APPROVED", effectiveDate: { lte: today } },
+    include: { employee: true },
+    orderBy: { effectiveDate: "asc" },
+  });
+  let applied = 0;
+  for (const c of due) {
+    try {
+      await applyCompensationChange(ctx, c, "APPROVED");
+      applied++;
+    } catch (e) {
+      if (!(e instanceof DomainError)) throw e; // already applied by a concurrent run
+    }
+  }
+  return applied;
 }
 
 export async function rejectCompensation(ctx: Ctx, id: string) {
   assertCan(ctx, "compensation.manage");
   const c = await prisma.compensationChange.findFirst({ where: { id, tenantId: ctx.tenantId } });
-  if (!c || c.status !== "PENDING") throw new DomainError("Only pending changes can be rejected.");
-  return prisma.compensationChange.update({ where: { id }, data: { status: "REJECTED" } });
+  if (!c || !["PENDING", "APPROVED"].includes(c.status)) throw new DomainError("Only pending or scheduled changes can be rejected.");
+  await claimTransition(prisma.compensationChange.updateMany({ where: { id, status: c.status }, data: { status: "REJECTED" } }));
+  return prisma.compensationChange.findUniqueOrThrow({ where: { id } });
 }
 
 /** Compa-ratio = salary ÷ grade midpoint. */
@@ -255,8 +322,14 @@ export async function recordLoanRepayment(ctx: Ctx, loanId: string, amount: numb
   if (amt > loan.balance) throw new DomainError(`That's more than the outstanding balance of RM${loan.balance.toFixed(2)}.`);
   if (!note.trim()) throw new DomainError("Record how it was repaid (e.g. bank transfer ref).");
   const balance = round2(loan.balance - amt);
-  await prisma.loanRepayment.create({ data: { loanId, period: periodOf(todayMY()), amount: amt } });
-  const updated = await prisma.loan.update({ where: { id: loanId }, data: { balance, status: balance === 0 ? "SETTLED" : "ACTIVE" } });
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(
+      tx.loan.updateMany({ where: { id: loanId, status: "ACTIVE", balance: loan.balance }, data: { balance, status: balance === 0 ? "SETTLED" : "ACTIVE" } }),
+      "The loan balance just changed. Refresh and try again.",
+    );
+    await tx.loanRepayment.create({ data: { loanId, period: periodOf(todayMY()), amount: amt } });
+  });
+  const updated = await prisma.loan.findUniqueOrThrow({ where: { id: loanId } });
   await audit(ctx, "UPDATE", "Loan", loanId, `Manual repayment RM${amt} from ${loan.employee.fullName}: ${note}`);
   return updated;
 }

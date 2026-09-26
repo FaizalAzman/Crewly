@@ -1,12 +1,11 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { requireCtx } from "@/server/context";
+import { getPendingApprovalCount, getSessionUser, requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { Badge, Card, CardBody, CardHeader, Callout, LinkButton, PageHeader, PersonCell, StatCard } from "@/components/ui";
 import { ColumnChart, HBarChart } from "@/components/charts";
 import { addDays, fmtDate, parsePeriod, periodLabel, rm, todayMY } from "@/lib/utils";
 import { holidayAppliesToState } from "@/lib/calendar";
-import { countPendingApprovals } from "@/server/services/approvals.service";
 import { approvalScope } from "@/server/services/scope";
 import { can } from "@/lib/permissions";
 import { setupProgress } from "@/server/services/onboarding.service";
@@ -40,7 +39,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       where: { tenantId: T, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today }, ...inTeamEmp },
       include: { employee: { select: { fullName: true, avatarColor: true, jobTitle: true } }, leaveType: true },
     }),
-    countPendingApprovals(ctx),
+    getPendingApprovalCount(),
     seePay ? prisma.payrollRun.findMany({ where: { tenantId: T, period: { startsWith: `${year}-` } }, orderBy: { period: "asc" } }) : Promise.resolve([]),
     prisma.publicHoliday.findMany({ where: { date: { gte: today, lte: addDays(today, 60) }, OR: [{ tenantId: null }, { tenantId: T }] }, orderBy: { date: "asc" } }),
     seeCompliance ? prisma.workPermit.findMany({ where: { tenantId: T }, include: { employee: { select: { fullName: true } } } }) : Promise.resolve([]),
@@ -51,15 +50,18 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     prisma.company.findFirst({ where: { tenantId: T, isDefault: true } }),
   ]);
 
-  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: T } });
-  const setup = can(ctx, "settings.manage") && !tenant.onboardedAt ? await setupProgress(T, ctx.userId) : null;
-  const upcomingLeave = seePay
-    ? []
-    : await prisma.leaveRequest.findMany({
-        where: { tenantId: T, status: { in: ["APPROVED", "PENDING"] }, startDate: { gt: today, lte: addDays(today, 14) }, ...inTeamEmp },
-        include: { employee: { select: { fullName: true, avatarColor: true, jobTitle: true } }, leaveType: true },
-        orderBy: { startDate: "asc" },
-      });
+  // The session already loaded the tenant; these two don't depend on each other, so run them together.
+  const tenant = (await getSessionUser())!.tenant;
+  const [setup, upcomingLeave] = await Promise.all([
+    can(ctx, "settings.manage") && !tenant.onboardedAt ? setupProgress(T, ctx.userId) : null,
+    seePay
+      ? []
+      : prisma.leaveRequest.findMany({
+          where: { tenantId: T, status: { in: ["APPROVED", "PENDING"] }, startDate: { gt: today, lte: addDays(today, 14) }, ...inTeamEmp },
+          include: { employee: { select: { fullName: true, avatarColor: true, jobTitle: true } }, leaveType: true },
+          orderBy: { startDate: "asc" },
+        }),
+  ]);
   const headcount = employees.length;
   const latest = [...runs].reverse().find(Boolean);
   const byPeriod = new Map<string, { net: number; statutory: number; tax: number }>();

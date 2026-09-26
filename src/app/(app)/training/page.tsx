@@ -8,7 +8,7 @@ import { act } from "@/server/action";
 import { completeEnrollment, createProgram, enroll, hrdLevyBalance } from "@/server/services/talent.service";
 import { boolField, dateField, fmtDate, numField, rm, str, todayMY } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
-import type { ActionState } from "@/server/types";
+import { DomainError, type ActionState } from "@/server/types";
 
 export const metadata: Metadata = { title: "Training & HRD Corp" };
 
@@ -36,11 +36,21 @@ async function statusAction(_: ActionState, fd: FormData): Promise<ActionState> 
   "use server";
   const ctx = await requireCtx("training.manage");
   return act(async () => {
-    if (str(fd, "enrollmentId")) await completeEnrollment(ctx, str(fd, "enrollmentId"), str(fd, "status") as "COMPLETED");
+    if (str(fd, "enrollmentId")) {
+      const status = str(fd, "status");
+      if (!["COMPLETED", "NO_SHOW", "ATTENDED"].includes(status)) throw new DomainError("Unknown enrolment status.");
+      await completeEnrollment(ctx, str(fd, "enrollmentId"), status as "COMPLETED");
+    }
     if (str(fd, "programId")) {
       const data: Record<string, string> = {};
-      if (str(fd, "hrdClaimStatus")) data.hrdClaimStatus = str(fd, "hrdClaimStatus");
-      if (str(fd, "programStatus")) data.status = str(fd, "programStatus");
+      if (str(fd, "hrdClaimStatus")) {
+        if (!["NOT_APPLIED", "APPLIED", "APPROVED", "CLAIMED"].includes(str(fd, "hrdClaimStatus"))) throw new DomainError("Unknown HRD Corp claim status.");
+        data.hrdClaimStatus = str(fd, "hrdClaimStatus");
+      }
+      if (str(fd, "programStatus")) {
+        if (!["SCHEDULED", "ONGOING", "COMPLETED", "CANCELLED"].includes(str(fd, "programStatus"))) throw new DomainError("Unknown programme status.");
+        data.status = str(fd, "programStatus");
+      }
       await prisma.trainingProgram.update({ where: { id: str(fd, "programId"), tenantId: ctx.tenantId }, data });
     }
     revalidatePath("/training");

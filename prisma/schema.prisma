@@ -65,6 +65,8 @@ model User {
 
   notifications Notification[]
   resetTokens   PasswordResetToken[]
+
+  @@index([tenantId])
 }
 
 /// Single-use token for password resets and invitations (only the hash is stored).
@@ -77,6 +79,8 @@ model PasswordResetToken {
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 /// Outbound email log. The mailer writes every message here (and sends via SMTP when configured).
@@ -90,6 +94,9 @@ model OutboundEmail {
   status    String   @default("QUEUED") // QUEUED | SENT | LOGGED | FAILED
   error     String?
   createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([createdAt])
 }
 
 /// Tenant-defined role: a named bundle of permissions plus a data scope.
@@ -120,6 +127,8 @@ model Upload {
   uploadedById String?
   purpose      String   @default("GENERAL") // RECEIPT | LEAVE | DOCUMENT | RESUME | GENERAL
   createdAt    DateTime @default(now())
+
+  @@index([tenantId])
 }
 
 model AuditLog {
@@ -146,6 +155,9 @@ model Notification {
   link      String?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, read])
 }
 
 model Invoice {
@@ -163,6 +175,9 @@ model Invoice {
   paymentRef String?
   paidAt    DateTime?
   issuedAt  DateTime @default(now())
+
+  @@index([tenantId, issuedAt])
+  @@index([tenantId, paidAt])
 }
 
 // ───────────────────────────── Organization ─────────────────────────────
@@ -196,6 +211,8 @@ model Company {
   branches    Branch[]
   employees   Employee[]
   payrollRuns PayrollRun[]
+
+  @@index([tenantId])
 }
 
 model Branch {
@@ -210,6 +227,9 @@ model Branch {
   longitude      Float?
   geofenceMeters Int      @default(200)
   employees      Employee[]
+
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 model Department {
@@ -226,6 +246,9 @@ model Department {
   employees  Employee[]   @relation("DeptMembers")
   positions  Position[]
   jobs       JobOpening[]
+
+  @@index([tenantId])
+  @@index([parentId])
 }
 
 model JobGrade {
@@ -238,6 +261,8 @@ model JobGrade {
   maxSalary Float
   employees Employee[]
   positions Position[]
+
+  @@index([tenantId])
 }
 
 model Position {
@@ -250,6 +275,8 @@ model Position {
   grade        JobGrade?   @relation(fields: [gradeId], references: [id], onDelete: SetNull)
   headcount    Int         @default(1)
   employees    Employee[]
+
+  @@index([tenantId])
 }
 
 // ───────────────────────────── Employees ─────────────────────────────
@@ -363,6 +390,9 @@ model Employee {
 
   @@unique([tenantId, employeeNo])
   @@index([tenantId, status])
+  @@index([tenantId, managerId])
+  @@index([tenantId, email])
+  @@index([companyId, status])
 }
 
 model EmployeeChild {
@@ -373,6 +403,8 @@ model EmployeeChild {
   dateOfBirth DateTime
   studying    Boolean  @default(false)
   disabled    Boolean  @default(false)
+
+  @@index([employeeId])
 }
 
 model EmployeeDocument {
@@ -384,6 +416,8 @@ model EmployeeDocument {
   url        String?
   expiryDate DateTime?
   createdAt  DateTime  @default(now())
+
+  @@index([employeeId])
 }
 
 model EmploymentHistory {
@@ -395,6 +429,8 @@ model EmploymentHistory {
   title         String
   details       String?
   createdAt     DateTime @default(now())
+
+  @@index([employeeId, effectiveDate])
 }
 
 // ───────────────────────────── Leave & calendar ─────────────────────────────
@@ -438,6 +474,7 @@ model LeaveBalance {
   pending        Float     @default(0)
 
   @@unique([employeeId, leaveTypeId, year])
+  @@index([leaveTypeId, year])
 }
 
 model LeaveRequest {
@@ -460,6 +497,8 @@ model LeaveRequest {
   createdAt   DateTime  @default(now())
 
   @@index([tenantId, status])
+  @@index([employeeId, startDate])
+  @@index([tenantId, startDate])
 }
 
 model PublicHoliday {
@@ -472,6 +511,7 @@ model PublicHoliday {
   year     Int
 
   @@index([year])
+  @@index([tenantId, year])
 }
 
 // ───────────────────────────── Time & attendance ─────────────────────────────
@@ -487,6 +527,8 @@ model Shift {
   color        String  @default("#5CC8FF")
   overnight    Boolean @default(false)
   roster       RosterEntry[]
+
+  @@index([tenantId])
 }
 
 model RosterEntry {
@@ -500,6 +542,7 @@ model RosterEntry {
   dayType    String   @default("WORK") // WORK | REST | OFF
 
   @@unique([employeeId, date])
+  @@index([tenantId, date])
 }
 
 model AttendanceRecord {
@@ -539,6 +582,10 @@ model OvertimeRequest {
   approverId    String?
   payrollRunId  String?
   createdAt     DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@index([employeeId, date])
+  @@index([payrollRunId])
 }
 
 // ───────────────────────────── Payroll ─────────────────────────────
@@ -575,6 +622,8 @@ model EmployeePayItem {
   amount     Float
   startDate  DateTime?
   endDate    DateTime?
+
+  @@index([employeeId])
 }
 
 model PayrollAdjustment {
@@ -588,6 +637,9 @@ model PayrollAdjustment {
   amount      Float
   note        String?
   createdAt   DateTime @default(now())
+
+  @@index([employeeId, period])
+  @@index([tenantId, period])
 }
 
 model PayrollRun {
@@ -620,6 +672,7 @@ model PayrollRun {
   payslips      Payslip[]
 
   @@unique([companyId, period])
+  @@index([tenantId, period])
 }
 
 model Payslip {
@@ -675,6 +728,8 @@ model PayslipLine {
   kind      String // EARNING | DEDUCTION | EMPLOYER
   amount    Float
   sortOrder Int     @default(0)
+
+  @@index([payslipId])
 }
 
 model TaxDeclaration {
@@ -721,6 +776,8 @@ model ClaimType {
   taxable         Boolean @default(false)
   active          Boolean @default(true)
   claims          Claim[]
+
+  @@index([tenantId])
 }
 
 model Claim {
@@ -744,6 +801,8 @@ model Claim {
   createdAt    DateTime  @default(now())
 
   @@index([tenantId, status])
+  @@index([employeeId, claimTypeId, date])
+  @@index([payrollRunId])
 }
 
 model Loan {
@@ -761,6 +820,9 @@ model Loan {
   approverId   String?
   createdAt    DateTime @default(now())
   repayments   LoanRepayment[]
+
+  @@index([tenantId, status])
+  @@index([employeeId, status])
 }
 
 model LoanRepayment {
@@ -771,6 +833,8 @@ model LoanRepayment {
   amount    Float
   runId     String?
   createdAt DateTime @default(now())
+
+  @@index([loanId])
 }
 
 // ───────────────────────────── Compensation & benefits ─────────────────────────────
@@ -789,6 +853,9 @@ model CompensationChange {
   reason        String?
   status        String   @default("PENDING") // PENDING | APPROVED | APPLIED | REJECTED
   createdAt     DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@index([employeeId])
 }
 
 model BenefitPlan {
@@ -802,6 +869,8 @@ model BenefitPlan {
   coversDependants Boolean @default(false)
   emoji         String  @default("🩺")
   enrollments   BenefitEnrollment[]
+
+  @@index([tenantId])
 }
 
 model BenefitEnrollment {
@@ -814,6 +883,7 @@ model BenefitEnrollment {
   utilised   Float       @default(0)
   startDate  DateTime
   @@unique([planId, employeeId])
+  @@index([employeeId])
 }
 
 model PanelClinic {
@@ -824,6 +894,8 @@ model PanelClinic {
   state    String
   phone    String?
   type     String @default("GP") // GP | DENTAL | SPECIALIST | HOSPITAL
+
+  @@index([tenantId])
 }
 
 // ───────────────────────────── Recruitment & lifecycle ─────────────────────────────
@@ -845,6 +917,8 @@ model JobOpening {
   closingDate    DateTime?
   createdAt      DateTime    @default(now())
   candidates     Candidate[]
+
+  @@index([tenantId, status])
 }
 
 model Candidate {
@@ -866,6 +940,9 @@ model Candidate {
   hiredEmployeeId String?
   createdAt      DateTime   @default(now())
   interviews     Interview[]
+
+  @@index([tenantId])
+  @@index([jobId, stage])
 }
 
 model Interview {
@@ -878,6 +955,8 @@ model Interview {
   score       Int?
   feedback    String?
   recommendation String? // STRONG_HIRE | HIRE | NO_HIRE
+
+  @@index([candidateId])
 }
 
 model ChecklistTemplate {
@@ -886,6 +965,8 @@ model ChecklistTemplate {
   name  String
   type  String // ONBOARDING | OFFBOARDING
   items ChecklistTemplateItem[]
+
+  @@index([tenantId])
 }
 
 model ChecklistTemplateItem {
@@ -896,6 +977,8 @@ model ChecklistTemplateItem {
   owner         String @default("HR") // HR | MANAGER | IT | EMPLOYEE | PAYROLL
   dueOffsetDays Int    @default(0)
   sortOrder     Int    @default(0)
+
+  @@index([templateId])
 }
 
 model Checklist {
@@ -907,6 +990,9 @@ model Checklist {
   title      String
   createdAt  DateTime @default(now())
   tasks      ChecklistTask[]
+
+  @@index([tenantId])
+  @@index([employeeId])
 }
 
 model ChecklistTask {
@@ -919,6 +1005,8 @@ model ChecklistTask {
   done        Boolean   @default(false)
   doneAt      DateTime?
   sortOrder   Int       @default(0)
+
+  @@index([checklistId])
 }
 
 model Separation {
@@ -942,6 +1030,9 @@ model Separation {
   rehireEligible     Boolean  @default(true)
   settlementPeriod   String? // payroll period the final settlement was posted to
   createdAt          DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@index([employeeId])
 }
 
 // ───────────────────────────── Performance & training ─────────────────────────────
@@ -956,6 +1047,8 @@ model ReviewCycle {
   status    String   @default("ACTIVE") // DRAFT | ACTIVE | CALIBRATION | CLOSED
   goals     Goal[]
   reviews   PerformanceReview[]
+
+  @@index([tenantId])
 }
 
 model Goal {
@@ -973,6 +1066,9 @@ model Goal {
   progress    Float       @default(0)
   status      String      @default("ON_TRACK") // ON_TRACK | AT_RISK | OFF_TRACK | DONE
   dueDate     DateTime?
+
+  @@index([employeeId, cycleId])
+  @@index([tenantId])
 }
 
 model PerformanceReview {
@@ -993,6 +1089,8 @@ model PerformanceReview {
   status         String      @default("SELF_REVIEW") // SELF_REVIEW | MANAGER_REVIEW | CALIBRATION | COMPLETED
   updatedAt      DateTime    @updatedAt
   @@unique([cycleId, employeeId])
+  @@index([tenantId, status])
+  @@index([employeeId])
 }
 
 model TrainingProgram {
@@ -1012,6 +1110,8 @@ model TrainingProgram {
   hrdClaimStatus String  @default("NOT_APPLIED") // NOT_APPLIED | APPLIED | APPROVED | CLAIMED
   status        String   @default("SCHEDULED") // SCHEDULED | ONGOING | COMPLETED | CANCELLED
   enrollments   TrainingEnrollment[]
+
+  @@index([tenantId, startDate])
 }
 
 model TrainingEnrollment {
@@ -1024,6 +1124,7 @@ model TrainingEnrollment {
   score       Float?
   feedback    Int?
   @@unique([programId, employeeId])
+  @@index([employeeId])
 }
 
 // ───────────────────────────── Assets, ER & compliance ─────────────────────────────
@@ -1043,6 +1144,9 @@ model Asset {
   assignedTo   Employee? @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
   assignedAt   DateTime?
   notes        String?
+
+  @@index([tenantId])
+  @@index([assignedToId])
 }
 
 model DisciplinaryCase {
@@ -1066,6 +1170,9 @@ model DisciplinaryCase {
   outcome          String? // NO_ACTION | VERBAL_WARNING | WRITTEN_WARNING | FINAL_WARNING | SUSPENSION | DEMOTION | DISMISSAL
   outcomeNotes     String?
   createdAt        DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([employeeId])
 }
 
 model Grievance {
@@ -1085,6 +1192,8 @@ model Grievance {
   inquiryDueDate DateTime?
   createdAt   DateTime  @default(now())
   resolvedAt  DateTime?
+
+  @@index([tenantId, status])
 }
 
 model WorkPermit {
@@ -1105,6 +1214,9 @@ model WorkPermit {
   insuranceNo    String? // SPIKPA / FWHS
   insuranceExpiry DateTime?
   status         String   @default("ACTIVE") // ACTIVE | RENEWAL | EXPIRED | CANCELLED
+
+  @@index([tenantId, expiryDate])
+  @@index([employeeId])
 }
 
 // ───────────────────────────── Documents, engagement, service ─────────────────────────────
@@ -1116,6 +1228,8 @@ model LetterTemplate {
   category String // OFFER | CONFIRMATION | INCREMENT | PROMOTION | WARNING | SHOW_CAUSE | EXPERIENCE | TERMINATION | OTHER
   body     String
   letters  GeneratedLetter[]
+
+  @@index([tenantId])
 }
 
 model GeneratedLetter {
@@ -1132,6 +1246,9 @@ model GeneratedLetter {
   issuedBy   String?
   acknowledgedAt DateTime?
   createdAt  DateTime       @default(now())
+
+  @@index([tenantId])
+  @@index([employeeId, status])
 }
 
 model Policy {
@@ -1144,6 +1261,8 @@ model Policy {
   requiresAck  Boolean  @default(true)
   publishedAt  DateTime @default(now())
   acknowledgements PolicyAcknowledgement[]
+
+  @@index([tenantId])
 }
 
 model PolicyAcknowledgement {
@@ -1154,6 +1273,7 @@ model PolicyAcknowledgement {
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   ackAt      DateTime @default(now())
   @@unique([policyId, employeeId])
+  @@index([employeeId])
 }
 
 model Announcement {
@@ -1165,6 +1285,8 @@ model Announcement {
   pinned      Boolean  @default(false)
   authorName  String
   publishedAt DateTime @default(now())
+
+  @@index([tenantId, publishedAt])
 }
 
 model Kudos {
@@ -1178,6 +1300,10 @@ model Kudos {
   message   String
   emoji     String   @default("🙌")
   createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([toId])
+  @@index([fromId, createdAt])
 }
 
 model Survey {
@@ -1191,6 +1317,8 @@ model Survey {
   closesAt    DateTime?
   createdAt   DateTime @default(now())
   responses   SurveyResponse[]
+
+  @@index([tenantId])
 }
 
 model SurveyResponse {
@@ -1219,6 +1347,9 @@ model Ticket {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   comments    TicketComment[]
+
+  @@index([tenantId, status])
+  @@index([employeeId])
 }
 
 model TicketComment {
@@ -1229,4 +1360,6 @@ model TicketComment {
   body       String
   internal   Boolean  @default(false)
   createdAt  DateTime @default(now())
+
+  @@index([ticketId])
 }

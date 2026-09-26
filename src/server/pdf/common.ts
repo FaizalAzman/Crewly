@@ -50,7 +50,7 @@ export async function loadImage(tenantId: string, url: string | null | undefined
   const up = await prisma.upload.findFirst({ where: { id: url.slice("/api/files/".length), tenantId } });
   if (!up || !["image/png", "image/jpeg"].includes(up.mimeType)) return null;
   try {
-    return await readFile(path.join(storageRoot(), up.storagePath));
+    return await readFile(path.join(/* turbopackIgnore: true */ storageRoot(), up.storagePath));
   } catch {
     return null;
   }

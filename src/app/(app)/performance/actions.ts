@@ -4,7 +4,7 @@ import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
 import { calibrate, launchCycle, submitManagerReview } from "@/server/services/talent.service";
 import { prisma } from "@/lib/db";
-import type { ActionState } from "@/server/types";
+import { DomainError, type ActionState } from "@/server/types";
 import { dateField, numField, optStr, str } from "@/lib/utils";
 
 export async function launchCycleAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -37,7 +37,9 @@ export async function calibrateAction(_: ActionState, fd: FormData): Promise<Act
 export async function closeCycleAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireCtx("performance.manage");
   return act(async () => {
-    await prisma.reviewCycle.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status: str(fd, "status") } });
+    const status = str(fd, "status");
+    if (!["DRAFT", "ACTIVE", "CALIBRATION", "CLOSED"].includes(status)) throw new DomainError("Unknown cycle status.");
+    await prisma.reviewCycle.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status } });
     return "Cycle updated";
   }, ["/performance"]);
 }

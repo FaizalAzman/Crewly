@@ -1,13 +1,12 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { getCtx, getSessionUser } from "@/server/context";
+import { getCtx, getPendingApprovalCount, getSessionUser } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
-import { APPROVAL_PERMISSIONS, NAV } from "@/components/shell/nav";
+import { NAV } from "@/components/shell/nav";
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
 import { logoutAction } from "../(auth)/actions";
-import { countPendingApprovals } from "@/server/services/approvals.service";
 import { MobileNotice } from "@/components/mobile-notice";
 import { tenantAccess } from "@/server/services/subscription.service";
 import Link from "next/link";
@@ -23,7 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const [notifications, approvals] = await Promise.all([
     prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 15 }),
-    APPROVAL_PERMISSIONS.some((p) => can(ctx, p)) ? countPendingApprovals(ctx) : Promise.resolve(0),
+    getPendingApprovalCount(),
   ]);
 
   async function markAllRead() {

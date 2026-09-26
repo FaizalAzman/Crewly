@@ -5,9 +5,11 @@ import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
 import { addChild, confirmEmployee, createEmployee, createLoginForEmployee, extendProbation, updateEmployee, type EmployeeInput } from "@/server/services/employee.service";
 import { prisma } from "@/lib/db";
-import { assertCan } from "@/server/guard";
-import { boolField, dateField, numField, optStr, str } from "@/lib/utils";
-import type { ActionState } from "@/server/types";
+import { assertActOnEmployee } from "@/server/guard";
+import { boolField, dateField, numField, optStr, round2, str } from "@/lib/utils";
+import { DomainError, type ActionState } from "@/server/types";
+
+const DOCUMENT_TYPES = ["IC", "PASSPORT", "CERTIFICATE", "CONTRACT", "MEDICAL", "OTHER"];
 import { fileOrText } from "@/server/services/upload.service";
 
 function parseEmployeeForm(fd: FormData): EmployeeInput {
@@ -113,7 +115,7 @@ export async function addChildAction(_: ActionState, fd: FormData): Promise<Acti
   const ctx = await requireCtx();
   const id = str(fd, "employeeId");
   return act(async () => {
-    await addChild(ctx, id, { name: str(fd, "name"), dateOfBirth: dateField(fd, "dateOfBirth") ?? new Date(), studying: boolField(fd, "studying"), disabled: boolField(fd, "disabled") });
+    await addChild(ctx, id, { name: str(fd, "name"), dateOfBirth: dateField(fd, "dateOfBirth") ?? new Date(NaN), studying: boolField(fd, "studying"), disabled: boolField(fd, "disabled") });
     return "Child added — PCB child relief updated";
   }, [`/employees/${id}`, "/me"]);
 }
@@ -122,7 +124,7 @@ export async function removeChildAction(_: ActionState, fd: FormData): Promise<A
   const ctx = await requireCtx("employee.manage");
   return act(async () => {
     const child = await prisma.employeeChild.findUnique({ where: { id: str(fd, "id") }, include: { employee: true } });
-    if (!child || child.employee.tenantId !== ctx.tenantId) return "Not found";
+    if (!child || child.employee.tenantId !== ctx.tenantId) throw new DomainError("That child record no longer exists.");
     await prisma.employeeChild.delete({ where: { id: child.id } });
     return "Removed";
   }, ["/employees"]);
@@ -132,9 +134,12 @@ export async function addDocumentAction(_: ActionState, fd: FormData): Promise<A
   const ctx = await requireCtx("employee.manage");
   const id = str(fd, "employeeId");
   return act(async () => {
-    assertCan(ctx, "employee.manage");
+    await assertActOnEmployee(ctx, id, "employee.manage");
+    const type = str(fd, "type") || "OTHER";
+    if (!DOCUMENT_TYPES.includes(type)) throw new DomainError("Pick a document type.");
+    if (!str(fd, "name")) throw new DomainError("Name the document (e.g. MyKad front & back).");
     await prisma.employeeDocument.create({
-      data: { employeeId: id, type: str(fd, "type") || "OTHER", name: str(fd, "name"), url: await fileOrText(ctx, fd, "file", "url", "DOCUMENT"), expiryDate: dateField(fd, "expiryDate") },
+      data: { employeeId: id, type, name: str(fd, "name"), url: await fileOrText(ctx, fd, "file", "url", "DOCUMENT"), expiryDate: dateField(fd, "expiryDate") },
     });
     return "Document added";
   }, [`/employees/${id}`]);
@@ -153,11 +158,16 @@ export async function addRecurringPayAction(_: ActionState, fd: FormData): Promi
   const ctx = await requireCtx("payroll.manage");
   const id = str(fd, "employeeId");
   return act(async () => {
-    const item = await prisma.payItem.findFirst({ where: { id: str(fd, "payItemId"), tenantId: ctx.tenantId } });
-    if (!item) return "Pay item not found";
-    await prisma.employeePayItem.create({
-      data: { employeeId: id, payItemId: item.id, amount: numField(fd, "amount"), startDate: dateField(fd, "startDate"), endDate: dateField(fd, "endDate") },
-    });
+    await assertActOnEmployee(ctx, id, "payroll.manage");
+    const item = await prisma.payItem.findFirst({ where: { id: str(fd, "payItemId"), tenantId: ctx.tenantId, active: true } });
+    if (!item) throw new DomainError("Pay item not found.");
+    if (item.system) throw new DomainError(`${item.name} is managed automatically.`);
+    const amount = numField(fd, "amount", NaN);
+    if (!Number.isFinite(amount) || amount <= 0) throw new DomainError("Enter a monthly amount above zero.");
+    const startDate = dateField(fd, "startDate");
+    const endDate = dateField(fd, "endDate");
+    if (startDate && endDate && endDate < startDate) throw new DomainError("End date can't be before the start date.");
+    await prisma.employeePayItem.create({ data: { employeeId: id, payItemId: item.id, amount: round2(amount), startDate, endDate } });
     return `${item.name} added`;
   }, [`/employees/${id}`]);
 }
@@ -166,7 +176,7 @@ export async function removeRecurringPayAction(_: ActionState, fd: FormData): Pr
   const ctx = await requireCtx("payroll.manage");
   return act(async () => {
     const row = await prisma.employeePayItem.findUnique({ where: { id: str(fd, "id") }, include: { employee: true } });
-    if (!row || row.employee.tenantId !== ctx.tenantId) return "Not found";
+    if (!row || row.employee.tenantId !== ctx.tenantId) throw new DomainError("That pay item no longer exists.");
     await prisma.employeePayItem.delete({ where: { id: row.id } });
     return "Removed";
   }, ["/employees"]);

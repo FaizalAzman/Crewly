@@ -13,7 +13,12 @@ import { toggleTask } from "@/server/services/lifecycle.service";
 import { fileGrievance } from "@/server/services/relations.service";
 import { DomainError, type ActionState } from "@/server/types";
 import { fileOrText } from "@/server/services/upload.service";
-import { boolField, dateField, numField, optStr, str } from "@/lib/utils";
+import { boolField, dateField, numField, optStr, str, todayMY } from "@/lib/utils";
+
+function required<T>(v: T | null | undefined, message: string): T {
+  if (v === null || v === undefined) throw new DomainError(message);
+  return v;
+}
 
 function me(ctx: { employeeId: string | null }) {
   if (!ctx.employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
@@ -72,7 +77,7 @@ export async function submitClaimAction(_: ActionState, fd: FormData): Promise<A
     const c = await submitClaim(ctx, {
       employeeId: str(fd, "employeeId") || me(ctx),
       claimTypeId: str(fd, "claimTypeId"),
-      date: dateField(fd, "date") ?? new Date(),
+      date: required(dateField(fd, "date"), "Enter the date of the expense."),
       amount: numField(fd, "amount"),
       mileageKm: str(fd, "mileageKm") ? numField(fd, "mileageKm") : null,
       description: str(fd, "description"),
@@ -96,7 +101,7 @@ export async function requestOvertimeAction(_: ActionState, fd: FormData): Promi
   return act(async () => {
     const r = await requestOvertime(ctx, {
       employeeId: str(fd, "employeeId") || me(ctx),
-      date: dateField(fd, "date") ?? new Date(),
+      date: required(dateField(fd, "date"), "Enter the date you worked overtime."),
       hours: numField(fd, "hours"),
       normalHours: numField(fd, "normalHours"),
       reason: optStr(fd, "reason") ?? undefined,
@@ -228,8 +233,8 @@ export async function resignAction(_: ActionState, fd: FormData): Promise<Action
     await createSeparation(ctx, {
       employeeId: me(ctx),
       type: "RESIGNATION",
-      noticeDate: dateField(fd, "noticeDate") ?? new Date(),
-      lastWorkingDate: dateField(fd, "lastWorkingDate") as Date,
+      noticeDate: dateField(fd, "noticeDate") ?? todayMY(),
+      lastWorkingDate: required(dateField(fd, "lastWorkingDate"), "Enter your proposed last working day."),
       reason: optStr(fd, "reason"),
     });
     return "Resignation submitted to HR";

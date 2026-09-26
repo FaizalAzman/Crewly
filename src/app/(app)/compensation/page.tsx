@@ -122,7 +122,7 @@ export default async function CompensationPage({ searchParams }: { searchParams:
                       )}
                     </TD>
                     <TD className="max-w-xs text-xs">{c.reason}</TD>
-                    <TD><StatusBadge status={c.status} /></TD>
+                    <TD><StatusBadge status={c.status === "APPROVED" ? "SCHEDULED" : c.status} /></TD>
                     <TD>{c.status === "PENDING" && <DecideButtons kind="compensation" id={c.id} requireReason={false} />}</TD>
                   </TR>
                 );

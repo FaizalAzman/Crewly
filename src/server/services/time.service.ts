@@ -2,7 +2,10 @@ import { prisma } from "@/lib/db";
 import { calcOvertimePay, MAX_MONTHLY_OT_HOURS, type DayType } from "@/lib/statutory/employment-act";
 import { dayKind } from "@/lib/calendar";
 import { parsePeriod, periodOf, round2, todayMY } from "@/lib/utils";
-import { assertCan, assertCanApproveFor, audit, notifyEmployee } from "../guard";
+import { assertActOnEmployee, assertCan, assertCanApproveFor, audit, claimTransition, notifyEmployee } from "../guard";
+import { ACTIVE_STATUSES } from "@/lib/constants";
+
+export const ATTENDANCE_STATUSES = ["PRESENT", "LATE", "ABSENT", "ON_LEAVE", "HOLIDAY", "REST"];
 import { DomainError, type Ctx } from "../types";
 import { employeeWorkState, holidaySet, tenantWorkWeek } from "./holiday.service";
 
@@ -41,9 +44,11 @@ async function shiftFor(tenantId: string, employeeId: string, date: Date) {
 export async function clockIn(ctx: Ctx, input: { employeeId?: string; lat?: number | null; lng?: number | null; now?: Date; source?: string }) {
   const employeeId = input.employeeId ?? ctx.employeeId;
   if (!employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
-  if (employeeId !== ctx.employeeId) assertCan(ctx, "attendance.manage");
+  const target = await assertActOnEmployee(ctx, employeeId, "attendance.manage");
+  if (!ACTIVE_STATUSES.includes(target.status)) throw new DomainError("Former employees can't clock in.");
   const now = input.now ?? new Date();
   const date = todayMY(now);
+  if (date < target.joinDate) throw new DomainError("Clock-in isn't open before the join date.");
   const existing = await prisma.attendanceRecord.findUnique({ where: { employeeId_date: { employeeId, date } } });
   if (existing?.clockIn) throw new DomainError("You've already clocked in today.");
 
@@ -62,13 +67,15 @@ export async function clockIn(ctx: Ctx, input: { employeeId?: string; lat?: numb
       if (!withinFence) note = `${Math.round(dist)}m from ${emp.branch.name}`;
     }
   }
+  // Self clock-ins can only claim WEB/MOBILE; KIOSK/MANUAL are reserved for HR-entered records.
+  const source = input.source === "MOBILE" ? "MOBILE" : "WEB";
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
   const shift = await shiftFor(ctx.tenantId, employeeId, date);
   const late = shift ? lateMinutes(now, shift.startTime, tenant.lateGraceMinutes) : 0;
 
   const rec = await prisma.attendanceRecord.upsert({
     where: { employeeId_date: { employeeId, date } },
-    update: { clockIn: now, inLat: input.lat ?? null, inLng: input.lng ?? null, withinFence, note, lateMinutes: late, status: late ? "LATE" : "PRESENT", source: input.source ?? "WEB" },
+    update: { clockIn: now, inLat: input.lat ?? null, inLng: input.lng ?? null, withinFence, note, lateMinutes: late, status: late ? "LATE" : "PRESENT", source },
     create: {
       tenantId: ctx.tenantId,
       employeeId,
@@ -80,7 +87,7 @@ export async function clockIn(ctx: Ctx, input: { employeeId?: string; lat?: numb
       note,
       lateMinutes: late,
       status: late ? "LATE" : "PRESENT",
-      source: input.source ?? "WEB",
+      source,
     },
   });
   return rec;
@@ -89,7 +96,7 @@ export async function clockIn(ctx: Ctx, input: { employeeId?: string; lat?: numb
 export async function clockOut(ctx: Ctx, input: { employeeId?: string; now?: Date }) {
   const employeeId = input.employeeId ?? ctx.employeeId;
   if (!employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
-  if (employeeId !== ctx.employeeId) assertCan(ctx, "attendance.manage");
+  await assertActOnEmployee(ctx, employeeId, "attendance.manage");
   const now = input.now ?? new Date();
   const date = todayMY(now);
   const rec = await prisma.attendanceRecord.findUnique({ where: { employeeId_date: { employeeId, date } } });
@@ -103,6 +110,9 @@ export async function clockOut(ctx: Ctx, input: { employeeId?: string; now?: Dat
 
 export async function manualAttendance(ctx: Ctx, input: { employeeId: string; date: Date; clockIn: Date | null; clockOut: Date | null; status: string; note: string }) {
   assertCan(ctx, "attendance.manage");
+  await assertActOnEmployee(ctx, input.employeeId, "attendance.manage");
+  if (!ATTENDANCE_STATUSES.includes(input.status)) throw new DomainError("Unknown attendance status.");
+  if (input.date > todayMY()) throw new DomainError("You can't record attendance for a future date.");
   if (!input.note) throw new DomainError("A note is required for manual attendance edits.");
   if (input.clockIn && input.clockOut && input.clockOut <= input.clockIn) throw new DomainError("Clock-out must be after clock-in.");
   const worked = input.clockIn && input.clockOut ? Math.max(0, Math.round((input.clockOut.getTime() - input.clockIn.getTime()) / 60000) - 60) : 0;
@@ -145,14 +155,13 @@ export function weeksWithoutRestDay(entries: { date: Date; dayType: string }[]) 
 // ───────────── Overtime ─────────────
 
 export async function requestOvertime(ctx: Ctx, input: { employeeId: string; date: Date; hours: number; normalHours?: number; reason?: string }) {
-  if (input.employeeId !== ctx.employeeId) assertCan(ctx, "attendance.manage");
-  if (input.hours < 0 || input.hours > 12) throw new DomainError("OT hours must be between 0 and 12 per day.");
+  const emp = await assertActOnEmployee(ctx, input.employeeId, "attendance.manage");
+  if (!Number.isFinite(input.hours) || input.hours < 0 || input.hours > 12) throw new DomainError("OT hours must be between 0 and 12 per day.");
   if ((input.normalHours ?? 0) < 0 || (input.normalHours ?? 0) > 12) throw new DomainError("Normal hours must be between 0 and 12.");
   if (input.hours === 0 && !input.normalHours) throw new DomainError("Enter the hours worked.");
   if (input.date > todayMY()) throw new DomainError("OT can only be claimed for days already worked.");
 
-  const emp = await prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } });
-  if (!emp) throw new DomainError("Employee not found.");
+  if (input.date < emp.joinDate) throw new DomainError("OT can't be claimed before the join date.");
   const [ww, state] = await Promise.all([tenantWorkWeek(ctx.tenantId), employeeWorkState(emp.id)]);
   const hol = await holidaySet(ctx.tenantId, state, input.date, input.date);
   const kind = dayKind(input.date, ww, hol);
@@ -194,7 +203,8 @@ export async function decideOvertime(ctx: Ctx, id: string, approve: boolean) {
   if (!r) throw new DomainError("OT request not found.");
   await assertCanApproveFor(ctx, r.employeeId, "overtime.approve");
   if (r.status !== "PENDING") throw new DomainError(`Already ${r.status.toLowerCase()}.`);
-  const updated = await prisma.overtimeRequest.update({ where: { id }, data: { status: approve ? "APPROVED" : "REJECTED", approverId: ctx.userId } });
+  await claimTransition(prisma.overtimeRequest.updateMany({ where: { id, status: "PENDING" }, data: { status: approve ? "APPROVED" : "REJECTED", approverId: ctx.userId } }));
+  const updated = await prisma.overtimeRequest.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(r.employeeId, `Your overtime on ${r.date.toISOString().slice(0, 10)} was ${approve ? "approved ✅" : "rejected"}`);
   await audit(ctx, approve ? "APPROVE" : "REJECT", "Overtime", id, `${approve ? "Approved" : "Rejected"} OT for ${r.employee.fullName}`);
   return updated;

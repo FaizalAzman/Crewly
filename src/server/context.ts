@@ -8,6 +8,8 @@ import { can, type Permission } from "@/lib/permissions";
 import type { Ctx } from "./types";
 import { ctxFromUser } from "./ctx";
 import { tenantAccess } from "./services/subscription.service";
+import { countPendingApprovals } from "./services/approvals.service";
+import { APPROVAL_PERMISSIONS } from "@/components/shell/nav";
 
 export const getSessionUser = cache(async () => {
   const store = await cookies();
@@ -26,6 +28,13 @@ export const getSessionUser = cache(async () => {
 export const getCtx = cache(async (): Promise<Ctx | null> => {
   const user = await getSessionUser();
   return user ? ctxFromUser(user) : null;
+});
+
+/** Pending-approval count for the sidebar badge and dashboard, memoised so one request computes it once. */
+export const getPendingApprovalCount = cache(async (): Promise<number> => {
+  const ctx = await getCtx();
+  if (!ctx || !APPROVAL_PERMISSIONS.some((p) => can(ctx, p))) return 0;
+  return countPendingApprovals(ctx);
 });
 
 /** For pages & actions: redirects to /login when signed out, and to /me when the role lacks the permission. */

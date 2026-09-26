@@ -119,6 +119,8 @@ export async function giveKudos(ctx: Ctx, input: { toId: string; value: string; 
   if (!ctx.employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
   if (input.toId === ctx.employeeId) throw new DomainError("Nice try — you can't give kudos to yourself 😄");
   if (input.message.trim().length < 5) throw new DomainError("Say a little more about why!");
+  const to = await prisma.employee.findFirst({ where: { id: input.toId, tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] } } });
+  if (!to) throw new DomainError("Pick a colleague.");
   const since = new Date(Date.now() - 86400000);
   const today = await prisma.kudos.count({ where: { fromId: ctx.employeeId, createdAt: { gte: since } } });
   if (today >= 5) throw new DomainError("You've given 5 kudos in the last 24 hours — save some for tomorrow!");
@@ -174,9 +176,14 @@ export function slaBreached(createdAt: Date, priority: string, status: string, n
   return now.getTime() - createdAt.getTime() > (SLA_HOURS[priority] ?? 72) * 3600000;
 }
 
+export const TICKET_CATEGORIES = ["PAYROLL", "LEAVE", "BENEFITS", "IT", "LETTER_REQUEST", "POLICY", "OTHER"];
+export const TICKET_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+
 export async function openTicket(ctx: Ctx, input: { category: string; subject: string; description: string; priority: string }) {
   if (!ctx.employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
   if (!input.subject.trim() || !input.description.trim()) throw new DomainError("Subject and description are required.");
+  if (!TICKET_CATEGORIES.includes(input.category)) throw new DomainError("Pick a category.");
+  if (!TICKET_PRIORITIES.includes(input.priority)) throw new DomainError("Pick a priority.");
   const count = await prisma.ticket.count({ where: { tenantId: ctx.tenantId } });
   return prisma.ticket.create({
     data: { tenantId: ctx.tenantId, refNo: `HR-${String(count + 1001)}`, employeeId: ctx.employeeId, ...input },
