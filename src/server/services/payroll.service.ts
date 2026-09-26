@@ -4,7 +4,8 @@ import { hrdfRate } from "@/lib/statutory/hrdf";
 import { countWorkingDays } from "@/lib/calendar";
 import { parsePeriod, periodOf, round2, shiftPeriod } from "@/lib/utils";
 import type { Citizenship } from "@/lib/statutory/epf";
-import { assertCan, audit, notifyEmployee } from "../guard";
+import { assertCan, audit, claimTransition, notifyEmployee } from "../guard";
+import { applyDueCompensation } from "./money.service";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { holidaySet, tenantWorkWeek } from "./holiday.service";
 
@@ -83,6 +84,8 @@ export async function calculatePayrollRun(ctx: Ctx, runId: string) {
   assertCan(ctx, "payroll.manage");
   const run = await loadRun(ctx, runId);
   if (!["DRAFT", "CALCULATED"].includes(run.status)) throw new DomainError(`Can't recalculate a ${run.status.toLowerCase()} run.`);
+  // Scheduled salary changes whose effective date has arrived must be in place before pay is computed.
+  await applyDueCompensation(ctx);
 
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
   const workWeek = await tenantWorkWeek(ctx.tenantId);
@@ -263,7 +266,8 @@ export async function approvePayrollRun(ctx: Ctx, runId: string) {
   if (prev && !FINAL.includes(prev.status)) throw new DomainError(`Finalise ${prev.period} before approving ${run.period}.`);
   const slips = await prisma.payslip.count({ where: { runId } });
   if (slips === 0) throw new DomainError("This run has no payslips.");
-  const updated = await prisma.payrollRun.update({ where: { id: runId }, data: { status: "APPROVED", approvedById: ctx.userId, approvedAt: new Date() } });
+  await claimTransition(prisma.payrollRun.updateMany({ where: { id: runId, status: "CALCULATED" }, data: { status: "APPROVED", approvedById: ctx.userId, approvedAt: new Date() } }));
+  const updated = await prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
   await audit(ctx, "APPROVE", "PayrollRun", runId, `Approved payroll ${run.period}`);
   return updated;
 }
@@ -273,18 +277,22 @@ export async function markPayrollPaid(ctx: Ctx, runId: string) {
   assertCan(ctx, "payroll.approve");
   const run = await loadRun(ctx, runId);
   if (run.status !== "APPROVED") throw new DomainError("Approve the run before marking it paid.");
-  await prisma.claim.updateMany({ where: { payrollRunId: runId }, data: { status: "PAID" } });
-  await prisma.overtimeRequest.updateMany({ where: { payrollRunId: runId }, data: { status: "PAID" } });
   const loanLines = await prisma.payslipLine.findMany({ where: { payslip: { runId }, code: { startsWith: "LOAN:" } } });
-  for (const line of loanLines) {
-    const loanId = line.code.slice(5);
-    const loan = await prisma.loan.findUnique({ where: { id: loanId } });
-    if (!loan) continue;
-    const balance = round2(Math.max(0, loan.balance - line.amount));
-    await prisma.loanRepayment.create({ data: { loanId, period: run.period, amount: line.amount, runId } });
-    await prisma.loan.update({ where: { id: loanId }, data: { balance, status: balance === 0 ? "SETTLED" : "ACTIVE" } });
-  }
-  const updated = await prisma.payrollRun.update({ where: { id: runId }, data: { status: "PAID", paidAt: new Date() } });
+  // One transaction, claimed by the APPROVED → PAID transition: a double click can't post loan repayments twice.
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(tx.payrollRun.updateMany({ where: { id: runId, status: "APPROVED" }, data: { status: "PAID", paidAt: new Date() } }));
+    await tx.claim.updateMany({ where: { payrollRunId: runId }, data: { status: "PAID" } });
+    await tx.overtimeRequest.updateMany({ where: { payrollRunId: runId }, data: { status: "PAID" } });
+    for (const line of loanLines) {
+      const loanId = line.code.slice(5);
+      const loan = await tx.loan.findFirst({ where: { id: loanId, tenantId: ctx.tenantId } });
+      if (!loan) continue;
+      const balance = round2(Math.max(0, loan.balance - line.amount));
+      await tx.loanRepayment.create({ data: { loanId, period: run.period, amount: line.amount, runId } });
+      await tx.loan.update({ where: { id: loanId }, data: { balance, status: balance === 0 ? "SETTLED" : "ACTIVE" } });
+    }
+  });
+  const updated = await prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
   const slips = await prisma.payslip.findMany({ where: { runId }, select: { employeeId: true, id: true } });
   for (const s of slips) await notifyEmployee(s.employeeId, `Your payslip for ${run.period} is ready 💸`, undefined, `/me/payslips/${s.id}`);
   await audit(ctx, "UPDATE", "PayrollRun", runId, `Marked payroll ${run.period} as paid`);
@@ -295,7 +303,9 @@ export async function lockPayrollRun(ctx: Ctx, runId: string) {
   assertCan(ctx, "payroll.approve");
   const run = await loadRun(ctx, runId);
   if (run.status !== "PAID") throw new DomainError("Only paid runs can be locked.");
-  return prisma.payrollRun.update({ where: { id: runId }, data: { status: "LOCKED" } });
+  await claimTransition(prisma.payrollRun.updateMany({ where: { id: runId, status: "PAID" }, data: { status: "LOCKED" } }));
+  await audit(ctx, "UPDATE", "PayrollRun", runId, `Locked payroll ${run.period}`);
+  return prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
 }
 
 export async function reopenPayrollRun(ctx: Ctx, runId: string) {
@@ -304,8 +314,9 @@ export async function reopenPayrollRun(ctx: Ctx, runId: string) {
   if (run.status !== "APPROVED") throw new DomainError("Only approved (unpaid) runs can be reopened.");
   const later = await prisma.payrollRun.findFirst({ where: { companyId: run.companyId, period: { gt: run.period }, status: { in: FINAL } } });
   if (later) throw new DomainError(`Can't reopen: ${later.period} is already finalised.`);
+  await claimTransition(prisma.payrollRun.updateMany({ where: { id: runId, status: "APPROVED" }, data: { status: "CALCULATED", approvedById: null, approvedAt: null } }));
   await audit(ctx, "UPDATE", "PayrollRun", runId, `Reopened payroll ${run.period}`);
-  return prisma.payrollRun.update({ where: { id: runId }, data: { status: "CALCULATED", approvedById: null, approvedAt: null } });
+  return prisma.payrollRun.findUniqueOrThrow({ where: { id: runId } });
 }
 
 export async function deletePayrollRun(ctx: Ctx, runId: string) {
@@ -320,7 +331,9 @@ export async function deletePayrollRun(ctx: Ctx, runId: string) {
 
 export async function addAdjustment(ctx: Ctx, input: { employeeId: string; payItemId: string; period: string; amount: number; note?: string }) {
   assertCan(ctx, "payroll.manage");
-  if (!input.amount) throw new DomainError("Amount can't be zero.");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) throw new DomainError("Period must be in YYYY-MM format.");
+  if (!Number.isFinite(input.amount) || !input.amount) throw new DomainError("Amount can't be zero.");
+  if (Math.abs(input.amount) > 10_000_000) throw new DomainError("That amount looks too large. Check it.");
   const [emp, item] = await Promise.all([
     prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } }),
     prisma.payItem.findFirst({ where: { id: input.payItemId, tenantId: ctx.tenantId } }),

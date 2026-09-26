@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { addDays, periodOf, todayMY } from "@/lib/utils";
-import { approveCompensation, cancelClaim, decideClaim, decideLoan, proposeCompensation, rejectCompensation, requestLoan, submitClaim } from "@/server/services/money.service";
+import { applyDueCompensation, approveCompensation, cancelClaim, decideClaim, decideLoan, proposeCompensation, rejectCompensation, requestLoan, submitClaim } from "@/server/services/money.service";
 import { D, makeWorld, type World } from "./factory";
 
 let w: World;
@@ -132,10 +132,31 @@ describe("Compensation", () => {
     const { id } = await w.emp({ basicSalary: 5000 });
     const { change } = await proposeCompensation(w.hr, { employeeId: id, type: "INCREMENT", effectiveDate: D("2026-10-01"), newSalary: 5500, reason: "Merit" });
     expect((await prisma.employee.findUniqueOrThrow({ where: { id } })).basicSalary).toBe(5000);
-    await approveCompensation(w.owner, change.id);
+    await approveCompensation(w.owner, change.id, { today: D("2026-10-01") });
     expect((await prisma.employee.findUniqueOrThrow({ where: { id } })).basicSalary).toBe(5500);
     const h = await prisma.employmentHistory.findFirst({ where: { employeeId: id, type: "INCREMENT" } });
     expect(h?.title).toMatch(/\+10%/);
+  });
+
+  it("future-dated increments are scheduled, then applied once (before payroll) when the date arrives", async () => {
+    const { id } = await w.emp({ basicSalary: 5000 });
+    const { change } = await proposeCompensation(w.hr, { employeeId: id, type: "INCREMENT", effectiveDate: D("2026-11-01"), newSalary: 5600 });
+    const scheduled = await approveCompensation(w.owner, change.id, { today: D("2026-10-15") });
+    expect(scheduled.status).toBe("APPROVED");
+    expect((await prisma.employee.findUniqueOrThrow({ where: { id } })).basicSalary).toBe(5000);
+    expect(await applyDueCompensation(w.owner, D("2026-10-31"))).toBe(0);
+    expect(await applyDueCompensation(w.owner, D("2026-11-01"))).toBeGreaterThanOrEqual(1);
+    expect(await applyDueCompensation(w.owner, D("2026-11-02"))).toBe(0);
+    expect((await prisma.employee.findUniqueOrThrow({ where: { id } })).basicSalary).toBe(5600);
+    expect(await prisma.employmentHistory.count({ where: { employeeId: id, type: "INCREMENT" } })).toBe(1);
+  });
+
+  it("approving the same change twice at once applies it exactly once", async () => {
+    const { id } = await w.emp({ basicSalary: 5000 });
+    const { change } = await proposeCompensation(w.hr, { employeeId: id, type: "BONUS", effectiveDate: D("2026-09-01"), bonusAmount: 1000 });
+    const results = await Promise.allSettled([approveCompensation(w.owner, change.id), approveCompensation(w.owner, change.id)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await prisma.payrollAdjustment.count({ where: { employeeId: id } })).toBe(1);
   });
 
   it("promotions require a new title", async () => {

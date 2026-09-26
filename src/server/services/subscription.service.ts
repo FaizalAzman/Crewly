@@ -128,7 +128,14 @@ export async function checkout(ctx: Ctx, input: { plan: PlanKey; cycle: "MONTHLY
   if (!PLANS[input.plan]) throw new DomainError("Unknown plan.");
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
   if (tenant.subscriptionStatus === "SUSPENDED" || tenant.closedAt) throw new ForbiddenError("This workspace can't be billed. Contact support.");
+  if (!["MONTHLY", "YEARLY"].includes(input.cycle)) throw new DomainError("Pick monthly or yearly billing.");
+  if (!["FPX", "CARD"].includes(input.method)) throw new DomainError("Pick a payment method.");
   await assertPlanFits(ctx.tenantId, input.plan);
+  // Double-submit guard: a second checkout right after a successful one is almost certainly a repeated click.
+  const recent = await prisma.invoice.findFirst({
+    where: { tenantId: ctx.tenantId, status: "PAID", plan: input.plan, cycle: input.cycle, paidAt: { gte: new Date(now.getTime() - 2 * 60_000), lte: now } },
+  });
+  if (recent) throw new DomainError(`Payment ${recent.number} went through a moment ago, so we didn't charge you again.`);
   const q = quoteFor(input.plan, await activeHeadcount(ctx.tenantId), input.cycle);
   const res = await gw.charge({ amount: q.total, currency: "MYR", description: `Crewly ${PLANS[input.plan].name} (${input.cycle.toLowerCase()})`, method: input.method, instrument: input.instrument });
   if (!res.ok) throw new DomainError(res.message ?? "Payment failed. Try another method.");

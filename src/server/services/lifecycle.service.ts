@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { noticePeriodWeeks, ordinaryRateOfPay, serviceYears, terminationBenefit } from "@/lib/statutory/employment-act";
 import { addDays, daysBetween, periodOf, round2, todayMY } from "@/lib/utils";
-import { assertCan, audit, notifyEmployee } from "../guard";
+import { assertCan, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
 import { unusedAnnualLeave } from "./leave.service";
 
@@ -72,9 +72,16 @@ export interface SeparationInput {
  *    retrenchment / termination not due to misconduct, when service ≥ 12 months.
  *  - Leave encashment for unused, pro-rated annual leave.
  */
+export const SEPARATION_TYPES = ["RESIGNATION", "TERMINATION", "RETRENCHMENT", "RETIREMENT", "END_OF_CONTRACT", "MUTUAL", "DEATH"];
+
 export async function previewSeparation(ctx: Ctx, input: SeparationInput) {
+  if (!SEPARATION_TYPES.includes(input.type)) throw new DomainError("Pick a separation type.");
+  for (const d of [input.noticeDate, input.lastWorkingDate]) {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) throw new DomainError("Enter both the notice date and the last working day.");
+  }
   const emp = await prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } });
   if (!emp) throw new DomainError("Employee not found.");
+  if (daysBetween(todayMY(), input.lastWorkingDate) > 366) throw new DomainError("The last working day is more than a year away. Check the date.");
   if (input.lastWorkingDate < input.noticeDate) throw new DomainError("Last working day can't be before the notice date.");
   if (input.lastWorkingDate < emp.joinDate) throw new DomainError("Last working day can't be before the join date.");
 
@@ -150,10 +157,13 @@ export async function approveSeparation(ctx: Ctx, id: string) {
   const sep = await prisma.separation.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: true } });
   if (!sep) throw new DomainError("Separation not found.");
   if (sep.status !== "PENDING") throw new DomainError("Only pending separations can be approved.");
-  await prisma.separation.update({ where: { id }, data: { status: "APPROVED" } });
-  await prisma.employee.update({
-    where: { id: sep.employeeId },
-    data: { status: "NOTICE", resignDate: sep.noticeDate, lastWorkingDate: sep.lastWorkingDate },
+  if (sep.employeeId === ctx.employeeId) throw new DomainError("Someone else must approve your own separation.");
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(tx.separation.updateMany({ where: { id, status: "PENDING" }, data: { status: "APPROVED" } }));
+    await tx.employee.update({
+      where: { id: sep.employeeId },
+      data: { status: "NOTICE", resignDate: sep.noticeDate, lastWorkingDate: sep.lastWorkingDate },
+    });
   });
   await createChecklistFromTemplate(ctx, sep.employeeId, "OFFBOARDING", sep.lastWorkingDate);
   await notifyEmployee(sep.employeeId, "Your separation has been acknowledged", `Last working day: ${sep.lastWorkingDate.toISOString().slice(0, 10)}`, "/me");
@@ -165,7 +175,11 @@ export async function withdrawSeparation(ctx: Ctx, id: string) {
   if (!sep) throw new DomainError("Separation not found.");
   if (ctx.employeeId !== sep.employeeId) assertCan(ctx, "lifecycle.manage");
   if (!["PENDING", "APPROVED"].includes(sep.status)) throw new DomainError("This separation can no longer be withdrawn.");
-  await prisma.separation.update({ where: { id }, data: { status: "WITHDRAWN" } });
+  if (sep.settlementPeriod) {
+    // The final settlement (termination benefit, leave encashment, notice pay, loan recovery) must not be paid to someone who stays.
+    throw new DomainError(`The final settlement was already posted to ${sep.settlementPeriod} payroll. Ask HR/payroll to reverse those adjustments before withdrawing.`);
+  }
+  await claimTransition(prisma.separation.updateMany({ where: { id, status: sep.status }, data: { status: "WITHDRAWN" } }));
   const emp = await prisma.employee.findUniqueOrThrow({ where: { id: sep.employeeId } });
   if (emp.status === "NOTICE") {
     await prisma.employee.update({
@@ -201,10 +215,12 @@ export async function completeSeparation(ctx: Ctx, id: string, opts: { exitInter
   if (unreturned.length) throw new DomainError(`${unreturned.length} company asset(s) haven't been returned yet.`);
   if (!sep.cp22aSubmitted && sep.type !== "DEATH") throw new DomainError("Mark CP22A as submitted to LHDN before completing.");
 
-  await prisma.separation.update({
-    where: { id },
-    data: { status: "COMPLETED", exitInterview: opts.exitInterview ?? sep.exitInterview, rehireEligible: opts.rehireEligible ?? sep.rehireEligible },
-  });
+  await claimTransition(
+    prisma.separation.updateMany({
+      where: { id, status: "APPROVED" },
+      data: { status: "COMPLETED", exitInterview: opts.exitInterview ?? sep.exitInterview, rehireEligible: opts.rehireEligible ?? sep.rehireEligible },
+    }),
+  );
   await prisma.employee.update({ where: { id: sep.employeeId }, data: { status: FINAL_STATUS[sep.type] ?? "RESIGNED" } });
   await prisma.employmentHistory.create({
     data: { employeeId: sep.employeeId, effectiveDate: sep.lastWorkingDate, type: "SEPARATED", title: `Left the company (${sep.type.toLowerCase().replace(/_/g, " ")})` },
@@ -245,13 +261,14 @@ export async function postFinalSettlement(ctx: Ctx, id: string) {
   if (sep.terminationBenefit > 0) lines.push({ payItemId: item("TERM_BENEFIT"), amount: sep.terminationBenefit, note: "Termination benefit (EA regulations)" });
   if (sep.noticePayInLieu > 0) lines.push({ payItemId: item("NOTICE_PAY"), amount: sep.noticePayInLieu, note: `Notice pay in lieu (${sep.shortfallDays} days)` });
   if (sep.noticePayInLieu < 0) lines.push({ payItemId: item("DED_OTHER"), amount: -sep.noticePayInLieu, note: `Notice shortfall indemnity (${sep.shortfallDays} days)` });
-  for (const l of lines) await prisma.payrollAdjustment.create({ data: { tenantId: ctx.tenantId, employeeId: sep.employeeId, period, ...l } });
-
-  // Recover remaining loan balances in the final payroll.
   const loans = await prisma.loan.findMany({ where: { employeeId: sep.employeeId, status: "ACTIVE", balance: { gt: 0 } } });
-  for (const loan of loans) await prisma.loan.update({ where: { id: loan.id }, data: { installment: loan.balance, startPeriod: loan.startPeriod > period ? period : loan.startPeriod } });
-
-  await prisma.separation.update({ where: { id }, data: { settlementPeriod: period } });
+  // Claimed by setting settlementPeriod: a double click can't post the termination benefit twice.
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(tx.separation.updateMany({ where: { id, settlementPeriod: null }, data: { settlementPeriod: period } }), "The final settlement was already posted.");
+    for (const l of lines) await tx.payrollAdjustment.create({ data: { tenantId: ctx.tenantId, employeeId: sep.employeeId, period, ...l } });
+    // Recover remaining loan balances in the final payroll.
+    for (const loan of loans) await tx.loan.update({ where: { id: loan.id }, data: { installment: loan.balance, startPeriod: loan.startPeriod > period ? period : loan.startPeriod } });
+  });
   await audit(ctx, "UPDATE", "Separation", id, `Posted final settlement for ${sep.employee.fullName} to ${period} payroll (${lines.length} item(s), ${loans.length} loan(s) recovered)`);
   return { period, lines: lines.length, loans: loans.length };
 }

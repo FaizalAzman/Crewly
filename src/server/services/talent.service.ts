@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { round2 } from "@/lib/utils";
-import { assertCan, audit, notifyEmployee } from "../guard";
+import { MINIMUM_WAGE } from "@/lib/statutory/employment-act";
+import { assertActOnEmployee, assertCan, audit, notifyEmployee } from "../guard";
 import { can } from "@/lib/permissions";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { createEmployee, type EmployeeInput } from "./employee.service";
@@ -20,14 +21,26 @@ export function canMoveStage(from: Stage, to: Stage): boolean {
   return STAGES.indexOf(to) > STAGES.indexOf(from) || STAGES.indexOf(to) === STAGES.indexOf(from) - 1;
 }
 
+/** Shared checks for job openings (create & edit). */
+async function validateJobInput(ctx: Ctx, input: { title: string; departmentId?: string | null; employmentType: string; workMode: string; salaryMin?: number | null; salaryMax?: number | null; headcount: number }) {
+  if (!input.title?.trim()) throw new DomainError("Job title is required.");
+  if (!["PERMANENT", "CONTRACT", "PROBATION", "INTERN", "PART_TIME"].includes(input.employmentType)) throw new DomainError("Pick an employment type.");
+  if (!["ONSITE", "HYBRID", "REMOTE"].includes(input.workMode)) throw new DomainError("Pick a work mode.");
+  if (input.salaryMin && input.salaryMax && input.salaryMin > input.salaryMax) throw new DomainError("Minimum salary can't exceed maximum.");
+  // Minimum Wages Order: advertised full-time pay can't be below the national minimum wage.
+  if (["PERMANENT", "CONTRACT", "PROBATION"].includes(input.employmentType) && input.salaryMin != null && input.salaryMin < MINIMUM_WAGE) {
+    throw new DomainError(`Advertised salary can't be below the minimum wage of RM${MINIMUM_WAGE.toLocaleString()}.`);
+  }
+  if (!Number.isInteger(input.headcount) || input.headcount < 1) throw new DomainError("Headcount must be a whole number, at least 1.");
+  if (input.departmentId && !(await prisma.department.findFirst({ where: { id: input.departmentId, tenantId: ctx.tenantId } }))) throw new DomainError("Department not found.");
+}
+
 export async function createJob(
   ctx: Ctx,
   input: { title: string; departmentId?: string | null; location: string; employmentType: string; workMode: string; salaryMin?: number | null; salaryMax?: number | null; headcount: number; description?: string; closingDate?: Date | null },
 ) {
   assertCan(ctx, "recruitment.manage");
-  if (!input.title) throw new DomainError("Job title is required.");
-  if (input.salaryMin && input.salaryMax && input.salaryMin > input.salaryMax) throw new DomainError("Minimum salary can't exceed maximum.");
-  if (input.headcount < 1) throw new DomainError("Headcount must be at least 1.");
+  await validateJobInput(ctx, input);
   return prisma.jobOpening.create({ data: { tenantId: ctx.tenantId, ...input } });
 }
 
@@ -36,6 +49,8 @@ export async function addCandidate(ctx: Ctx, input: { jobId: string; name: strin
   const job = await prisma.jobOpening.findFirst({ where: { id: input.jobId, tenantId: ctx.tenantId } });
   if (!job) throw new DomainError("Job not found.");
   if (job.status === "CLOSED") throw new DomainError("This job is closed.");
+  if (!input.name?.trim()) throw new DomainError("Candidate name is required.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email ?? "")) throw new DomainError("Enter a valid email address.");
   if (await prisma.candidate.findFirst({ where: { jobId: job.id, email: input.email.toLowerCase() } })) throw new DomainError("This candidate already applied for this job.");
   return prisma.candidate.create({ data: { tenantId: ctx.tenantId, ...input, email: input.email.toLowerCase() } });
 }
@@ -54,6 +69,9 @@ export async function scheduleInterview(ctx: Ctx, input: { candidateId: string; 
   const c = await prisma.candidate.findFirst({ where: { id: input.candidateId, tenantId: ctx.tenantId } });
   if (!c) throw new DomainError("Candidate not found.");
   if (["HIRED", "REJECTED"].includes(c.stage)) throw new DomainError("Candidate is no longer in the pipeline.");
+  if (!(input.scheduledAt instanceof Date) || Number.isNaN(input.scheduledAt.getTime())) throw new DomainError("Pick the interview date and time.");
+  if (!["VIDEO", "ONSITE", "PHONE"].includes(input.mode)) throw new DomainError("Pick an interview mode.");
+  if (!input.interviewer?.trim()) throw new DomainError("Who is interviewing?");
   const iv = await prisma.interview.create({ data: input });
   if (["APPLIED", "SCREENING"].includes(c.stage)) await prisma.candidate.update({ where: { id: c.id }, data: { stage: "INTERVIEW" } });
   return iv;
@@ -61,7 +79,8 @@ export async function scheduleInterview(ctx: Ctx, input: { candidateId: string; 
 
 export async function scoreInterview(ctx: Ctx, id: string, score: number, feedback: string, recommendation: string) {
   assertCan(ctx, "recruitment.manage");
-  if (score < 1 || score > 5) throw new DomainError("Score must be 1 – 5.");
+  if (!Number.isInteger(score) || score < 1 || score > 5) throw new DomainError("Score must be 1 – 5.");
+  if (recommendation && !["STRONG_HIRE", "HIRE", "NO_HIRE"].includes(recommendation)) throw new DomainError("Pick a recommendation.");
   const iv = await prisma.interview.findUnique({ where: { id }, include: { candidate: true } });
   if (!iv || iv.candidate.tenantId !== ctx.tenantId) throw new DomainError("Interview not found.");
   await prisma.interview.update({ where: { id }, data: { score, feedback, recommendation } });
@@ -107,9 +126,14 @@ export function finalRating(managerRating: number, goalScore: number) {
   return Math.round((0.7 * managerRating + 0.3 * goalRating) * 2) / 2;
 }
 
+export const GOAL_STATUSES = ["ON_TRACK", "AT_RISK", "OFF_TRACK", "DONE"];
+
 export async function setGoal(ctx: Ctx, input: { employeeId: string; cycleId?: string | null; title: string; kind: string; weight: number; target?: string; dueDate?: Date | null }) {
-  if (input.employeeId !== ctx.employeeId) assertCan(ctx, "performance.review");
-  if (input.weight <= 0 || input.weight > 100) throw new DomainError("Weight must be between 1 and 100.");
+  await assertActOnEmployee(ctx, input.employeeId, "performance.review");
+  if (!input.title?.trim()) throw new DomainError("Give the goal a title.");
+  if (!["KPI", "OKR"].includes(input.kind)) throw new DomainError("Goal type must be KPI or OKR.");
+  if (!Number.isFinite(input.weight) || input.weight <= 0 || input.weight > 100) throw new DomainError("Weight must be between 1 and 100.");
+  if (input.cycleId && !(await prisma.reviewCycle.findFirst({ where: { id: input.cycleId, tenantId: ctx.tenantId } }))) throw new DomainError("Review cycle not found.");
   const existing = await prisma.goal.findMany({ where: { employeeId: input.employeeId, cycleId: input.cycleId ?? null } });
   const total = existing.reduce((s, g) => s + g.weight, 0) + input.weight;
   if (total > 100) throw new DomainError(`Goal weights would total ${total}% — keep it at 100% or below.`);
@@ -119,8 +143,9 @@ export async function setGoal(ctx: Ctx, input: { employeeId: string; cycleId?: s
 export async function updateGoalProgress(ctx: Ctx, id: string, progress: number, status?: string) {
   const g = await prisma.goal.findFirst({ where: { id, tenantId: ctx.tenantId } });
   if (!g) throw new DomainError("Goal not found.");
-  if (g.employeeId !== ctx.employeeId) assertCan(ctx, "performance.review");
-  if (progress < 0 || progress > 100) throw new DomainError("Progress must be 0 – 100%.");
+  await assertActOnEmployee(ctx, g.employeeId, "performance.review");
+  if (!Number.isFinite(progress) || progress < 0 || progress > 100) throw new DomainError("Progress must be 0 – 100%.");
+  if (status && !GOAL_STATUSES.includes(status)) throw new DomainError("Unknown goal status.");
   return prisma.goal.update({ where: { id }, data: { progress, status: status ?? (progress >= 100 ? "DONE" : g.status) } });
 }
 
@@ -186,7 +211,8 @@ export async function createProgram(
 }
 
 export async function enroll(ctx: Ctx, programId: string, employeeId: string) {
-  if (employeeId !== ctx.employeeId) assertCan(ctx, "training.manage");
+  const emp = await assertActOnEmployee(ctx, employeeId, "training.manage");
+  if (["RESIGNED", "TERMINATED", "RETIRED"].includes(emp.status)) throw new DomainError("Former employees can't be enrolled.");
   const p = await prisma.trainingProgram.findFirst({ where: { id: programId, tenantId: ctx.tenantId }, include: { enrollments: true } });
   if (!p) throw new DomainError("Programme not found.");
   if (["COMPLETED", "CANCELLED"].includes(p.status)) throw new DomainError("Enrolment is closed for this programme.");
@@ -223,9 +249,7 @@ export async function updateJob(
   assertCan(ctx, "recruitment.manage");
   const job = await prisma.jobOpening.findFirst({ where: { id, tenantId: ctx.tenantId } });
   if (!job) throw new DomainError("Job not found.");
-  if (!input.title) throw new DomainError("Job title is required.");
-  if (input.salaryMin && input.salaryMax && input.salaryMin > input.salaryMax) throw new DomainError("Minimum salary can't exceed maximum.");
-  if (input.headcount < 1) throw new DomainError("Headcount must be at least 1.");
+  await validateJobInput(ctx, input);
   return prisma.jobOpening.update({ where: { id }, data: input });
 }
 

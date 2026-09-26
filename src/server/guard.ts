@@ -1,9 +1,34 @@
 import { can, type Permission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
-import { ForbiddenError, type Ctx } from "./types";
+import { DomainError, ForbiddenError, type Ctx } from "./types";
 
 export function assertCan(ctx: Ctx, permission: Permission) {
   if (!can(ctx, permission)) throw new ForbiddenError();
+}
+
+/**
+ * Gate for acting on an employee's record ("on behalf of"): yourself always; anyone else needs the
+ * permission, must be in this tenant, and — for team-scoped roles — in the actor's reporting line.
+ * Returns the tenant-scoped employee row.
+ */
+export async function assertActOnEmployee(ctx: Ctx, employeeId: string | null | undefined, permission: Permission) {
+  if (!employeeId) throw new DomainError("Pick an employee.");
+  if (employeeId !== ctx.employeeId) assertCan(ctx, permission);
+  const emp = await prisma.employee.findFirst({ where: { id: employeeId, tenantId: ctx.tenantId } });
+  if (!emp) throw new DomainError("Employee not found.");
+  if (employeeId !== ctx.employeeId && ctx.scope !== "ALL") {
+    if (!ctx.employeeId || !(await isInManagerChain(ctx.employeeId, employeeId))) throw new ForbiddenError("You can only act for people in your team.");
+  }
+  return emp;
+}
+
+/**
+ * Compare-and-set for status transitions: pass an `updateMany` whose `where` pins the expected current state.
+ * If another request already moved the row (double-click, two approvers), nothing is written and this throws.
+ */
+export async function claimTransition(update: Promise<{ count: number }>, message = "Someone already handled this. Refresh to see the latest status.") {
+  const { count } = await update;
+  if (count !== 1) throw new DomainError(message);
 }
 
 /** A manager may act on their direct (and indirect) reports; HR-level roles on anyone in the tenant. */

@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/db";
 import { countCalendarDays, countWorkingDays } from "@/lib/calendar";
 import { annualLeaveDays, HOSPITALISATION_DAYS, serviceYears, sickLeaveDays } from "@/lib/statutory/employment-act";
-import { daysBetween, round2, todayMY, utcDate } from "@/lib/utils";
-import { assertCan, assertCanApproveFor, audit, notifyEmployee } from "../guard";
+import { daysBetween, periodOf, round2, todayMY, utcDate } from "@/lib/utils";
+import { assertActOnEmployee, assertCan, assertCanApproveFor, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { employeeWorkState, holidaySet, tenantWorkWeek } from "./holiday.service";
 
@@ -105,14 +105,12 @@ export async function computeLeaveDays(tenantId: string, employeeId: string, typ
 
 export async function applyLeave(ctx: Ctx, input: ApplyLeaveInput, opts: { onBehalf?: boolean; today?: Date } = {}) {
   const onBehalf = ctx.employeeId !== input.employeeId;
-  if (onBehalf) assertCan(ctx, "leave.manage");
   const today = opts.today ?? todayMY();
 
   const [emp, type] = await Promise.all([
-    prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } }),
+    assertActOnEmployee(ctx, input.employeeId, "leave.manage"),
     prisma.leaveType.findFirst({ where: { id: input.leaveTypeId, tenantId: ctx.tenantId } }),
   ]);
-  if (!emp) throw new DomainError("Employee not found.");
   if (!type || !type.active) throw new DomainError("Leave type not available.");
   if (["RESIGNED", "TERMINATED", "RETIRED"].includes(emp.status)) throw new DomainError("Former employees can't apply for leave.");
 
@@ -162,7 +160,11 @@ export async function applyLeave(ctx: Ctx, input: ApplyLeaveInput, opts: { onBeh
       avail = Math.min(avail, HOSPITALISATION_DAYS - (sl ? sl.taken + sl.pending : 0) - bal.taken - bal.pending);
     }
     if (days > avail) throw new DomainError(`Not enough ${type.name} balance: requesting ${days}, available ${Math.max(0, avail)}.`);
-    await prisma.leaveBalance.update({ where: { id: bal.id }, data: { pending: { increment: days } } });
+    // Optimistic lock: only reserve if the balance is unchanged since we read it (guards double submits).
+    await claimTransition(
+      prisma.leaveBalance.updateMany({ where: { id: bal.id, pending: bal.pending, taken: bal.taken, adjustment: bal.adjustment }, data: { pending: { increment: days } } }),
+      "Your leave balance just changed. Please submit again.",
+    );
   }
 
   const request = await prisma.leaveRequest.create({
@@ -198,14 +200,14 @@ export async function approveLeave(ctx: Ctx, id: string, note?: string) {
   const r = await loadRequest(ctx, id);
   await assertCanApproveFor(ctx, r.employeeId, "leave.approve");
   if (r.status !== "PENDING") throw new DomainError(`This request is already ${r.status.toLowerCase()}.`);
-  if (tracksBalance(r.leaveType)) {
-    const bal = await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId);
-    await prisma.leaveBalance.update({ where: { id: bal.id }, data: { pending: { decrement: r.days }, taken: { increment: r.days } } });
-  }
-  const updated = await prisma.leaveRequest.update({
-    where: { id },
-    data: { status: "APPROVED", approverId: ctx.userId, approverNote: note ?? null, decidedAt: new Date() },
+  const bal = tracksBalance(r.leaveType) ? await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId) : null;
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(
+      tx.leaveRequest.updateMany({ where: { id, status: "PENDING" }, data: { status: "APPROVED", approverId: ctx.userId, approverNote: note ?? null, decidedAt: new Date() } }),
+    );
+    if (bal) await tx.leaveBalance.update({ where: { id: bal.id }, data: { pending: { decrement: r.days }, taken: { increment: r.days } } });
   });
+  const updated = await prisma.leaveRequest.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(r.employeeId, `Your ${r.leaveType.name} was approved ✅`, `${r.days} day(s)`, "/me/leave");
   await audit(ctx, "APPROVE", "LeaveRequest", id, `Approved ${r.employee.fullName}'s ${r.leaveType.code} (${r.days}d)`);
   return updated;
@@ -216,14 +218,14 @@ export async function rejectLeave(ctx: Ctx, id: string, note?: string) {
   await assertCanApproveFor(ctx, r.employeeId, "leave.approve");
   if (r.status !== "PENDING") throw new DomainError(`This request is already ${r.status.toLowerCase()}.`);
   if (!note?.trim()) throw new DomainError("Please give a reason when rejecting leave.");
-  if (tracksBalance(r.leaveType)) {
-    const bal = await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId);
-    await prisma.leaveBalance.update({ where: { id: bal.id }, data: { pending: { decrement: r.days } } });
-  }
-  const updated = await prisma.leaveRequest.update({
-    where: { id },
-    data: { status: "REJECTED", approverId: ctx.userId, approverNote: note, decidedAt: new Date() },
+  const bal = tracksBalance(r.leaveType) ? await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId) : null;
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(
+      tx.leaveRequest.updateMany({ where: { id, status: "PENDING" }, data: { status: "REJECTED", approverId: ctx.userId, approverNote: note, decidedAt: new Date() } }),
+    );
+    if (bal) await tx.leaveBalance.update({ where: { id: bal.id }, data: { pending: { decrement: r.days } } });
   });
+  const updated = await prisma.leaveRequest.findUniqueOrThrow({ where: { id } });
   await notifyEmployee(r.employeeId, `Your ${r.leaveType.name} was not approved`, note, "/me/leave");
   await audit(ctx, "REJECT", "LeaveRequest", id, `Rejected ${r.employee.fullName}'s ${r.leaveType.code}`);
   return updated;
@@ -236,14 +238,19 @@ export async function cancelLeave(ctx: Ctx, id: string, opts: { today?: Date } =
   if (!["PENDING", "APPROVED"].includes(r.status)) throw new DomainError("Only pending or approved leave can be cancelled.");
   const today = opts.today ?? todayMY();
   if (own && r.status === "APPROVED" && r.startDate <= today) throw new ForbiddenError("Leave that has started can only be cancelled by HR.");
-  if (tracksBalance(r.leaveType)) {
-    const bal = await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId);
-    await prisma.leaveBalance.update({
-      where: { id: bal.id },
-      data: r.status === "PENDING" ? { pending: { decrement: r.days } } : { taken: { decrement: r.days } },
+  if (r.status === "APPROVED" && !r.leaveType.paid) {
+    // Unpaid leave already deducted in a finalised payroll can't silently disappear.
+    const finalised = await prisma.payslip.findFirst({
+      where: { employeeId: r.employeeId, period: { gte: periodOf(r.startDate), lte: periodOf(r.endDate) }, run: { status: { in: ["APPROVED", "PAID", "LOCKED"] } } },
     });
+    if (finalised) throw new DomainError(`Payroll for ${finalised.period} is finalised with this unpaid leave. Refund it through a payroll adjustment instead.`);
   }
-  const updated = await prisma.leaveRequest.update({ where: { id }, data: { status: "CANCELLED", decidedAt: new Date() } });
+  const bal = tracksBalance(r.leaveType) ? await getBalance(r.employeeId, r.leaveTypeId, r.startDate.getUTCFullYear(), ctx.tenantId) : null;
+  await prisma.$transaction(async (tx) => {
+    await claimTransition(tx.leaveRequest.updateMany({ where: { id, status: r.status }, data: { status: "CANCELLED", decidedAt: new Date() } }));
+    if (bal) await tx.leaveBalance.update({ where: { id: bal.id }, data: r.status === "PENDING" ? { pending: { decrement: r.days } } : { taken: { decrement: r.days } } });
+  });
+  const updated = await prisma.leaveRequest.findUniqueOrThrow({ where: { id } });
   await audit(ctx, "UPDATE", "LeaveRequest", id, `Cancelled ${r.employee.fullName}'s ${r.leaveType.code}`);
   return updated;
 }
@@ -251,7 +258,10 @@ export async function cancelLeave(ctx: Ctx, id: string, opts: { today?: Date } =
 /** Credit replacement leave (e.g. for working on a public holiday / rest day). */
 export async function creditReplacementLeave(ctx: Ctx, employeeId: string, days: number, reason: string) {
   assertCan(ctx, "leave.manage");
-  if (days <= 0 || days > 10) throw new DomainError("Replacement leave credit must be between 0.5 and 10 days.");
+  if (days <= 0 || days > 10 || (days * 2) % 1 !== 0) throw new DomainError("Replacement leave credit must be between 0.5 and 10 days, in half days.");
+  if (!reason?.trim()) throw new DomainError("Say what the replacement leave is for (e.g. worked on Hari Raya).");
+  if (employeeId === ctx.employeeId) throw new ForbiddenError("You can't credit leave to yourself.");
+  await assertActOnEmployee(ctx, employeeId, "leave.manage");
   const rl = await prisma.leaveType.findFirst({ where: { tenantId: ctx.tenantId, code: "RL" } });
   if (!rl) throw new DomainError("Replacement leave type is not configured.");
   const bal = await getBalance(employeeId, rl.id, todayMY().getUTCFullYear(), ctx.tenantId);
@@ -263,7 +273,9 @@ export async function adjustBalance(ctx: Ctx, balanceId: string, delta: number, 
   assertCan(ctx, "leave.manage");
   const bal = await prisma.leaveBalance.findUnique({ where: { id: balanceId }, include: { employee: true } });
   if (!bal || bal.employee.tenantId !== ctx.tenantId) throw new DomainError("Balance not found.");
+  if (bal.employeeId === ctx.employeeId) throw new ForbiddenError("You can't adjust your own leave balance.");
   if (!reason) throw new DomainError("A reason is required for balance adjustments.");
+  if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 365 || (delta * 2) % 1 !== 0) throw new DomainError("Adjust by a non-zero number of days, in half days.");
   if (available({ ...bal, adjustment: bal.adjustment + delta }) < 0) throw new DomainError("Adjustment would make the balance negative.");
   await prisma.leaveBalance.update({ where: { id: balanceId }, data: { adjustment: { increment: delta } } });
   await audit(ctx, "UPDATE", "LeaveBalance", balanceId, `Adjusted by ${delta}: ${reason}`);

@@ -6,7 +6,7 @@ import { requireCtx } from "@/server/context";
 import { addCandidate, createJob, hireCandidate, moveCandidate, scheduleInterview, scoreInterview, updateCandidateNotes, updateJob, type Stage } from "@/server/services/talent.service";
 import { fileOrText } from "@/server/services/upload.service";
 import { prisma } from "@/lib/db";
-import type { ActionState } from "@/server/types";
+import { DomainError, type ActionState } from "@/server/types";
 import { dateField, numField, optStr, str } from "@/lib/utils";
 
 export async function createJobAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -31,7 +31,9 @@ export async function createJobAction(_: ActionState, fd: FormData): Promise<Act
 export async function setJobStatusAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireCtx("recruitment.manage");
   return act(async () => {
-    await prisma.jobOpening.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status: str(fd, "status") } });
+    const status = str(fd, "status");
+    if (!["DRAFT", "OPEN", "ON_HOLD", "CLOSED"].includes(status)) throw new DomainError("Unknown job status.");
+    await prisma.jobOpening.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status } });
     return "Status updated";
   }, ["/recruitment"]);
 }

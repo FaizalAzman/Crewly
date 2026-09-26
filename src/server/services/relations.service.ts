@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { MAX_SUSPENSION_DAYS } from "@/lib/statutory/employment-act";
 import { addDays, daysBetween, todayMY } from "@/lib/utils";
-import { assertCan, audit, notifyEmployee } from "../guard";
+import { assertActOnEmployee, assertCan, audit, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
 
 // ───────────── Disciplinary ─────────────
@@ -96,8 +96,11 @@ export async function closeCase(ctx: Ctx, id: string) {
  * Sexual harassment complaints (EA Part XVA, s.81A–81H): the employer must inquire into the complaint;
  * if it decides not to, it must inform the complainant with reasons within 30 days.
  */
+export const GRIEVANCE_CATEGORIES = ["WORKPLACE", "MANAGER", "PAY", "DISCRIMINATION", "SEXUAL_HARASSMENT", "SAFETY", "OTHER"];
+
 export async function fileGrievance(ctx: Ctx, input: { employeeId?: string | null; anonymous: boolean; category: string; subject: string; description: string; against?: string }) {
-  if (input.employeeId && input.employeeId !== ctx.employeeId) assertCan(ctx, "er.manage");
+  if (input.employeeId) await assertActOnEmployee(ctx, input.employeeId, "er.manage");
+  if (!GRIEVANCE_CATEGORIES.includes(input.category)) throw new DomainError("Pick a category.");
   if (!input.subject?.trim() || !input.description?.trim()) throw new DomainError("Subject and description are required.");
   if (input.category === "SEXUAL_HARASSMENT" && input.anonymous) {
     throw new DomainError("Sexual harassment complaints can't be anonymous — the law requires an inquiry with the complainant. Your identity stays confidential.");

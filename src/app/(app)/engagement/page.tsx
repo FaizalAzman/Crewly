@@ -47,6 +47,7 @@ async function surveyStatusAction(_: ActionState, fd: FormData): Promise<ActionS
   "use server";
   const ctx = await requireCtx("engagement.manage");
   return act(async () => {
+    if (!["OPEN", "CLOSED"].includes(str(fd, "status"))) throw new DomainError("Unknown survey status.");
     await prisma.survey.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status: str(fd, "status") } });
     revalidatePath("/engagement");
     return str(fd, "status") === "CLOSED" ? "Survey closed" : "Survey reopened";

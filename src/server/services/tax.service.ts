@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { round2 } from "@/lib/utils";
-import { assertCan } from "../guard";
+import { assertActOnEmployee, assertCan } from "../guard";
 import { DomainError, type Ctx } from "../types";
 import type { SlipRow } from "@/lib/payroll/statutory-files";
 
@@ -120,8 +120,13 @@ export async function cp8d(ctx: Ctx, companyId: string, year: number) {
 
 /** Declarations (TP1 reliefs + TP3 prior employment) for an employee-year. */
 export async function saveTaxDeclaration(ctx: Ctx, employeeId: string, year: number, data: Record<string, number>) {
-  if (ctx.employeeId !== employeeId) assertCan(ctx, "tax.manage");
-  for (const [k, v] of Object.entries(data)) if (v < 0) throw new DomainError(`${k} can't be negative.`);
+  await assertActOnEmployee(ctx, employeeId, "tax.manage");
+  const thisYear = new Date().getUTCFullYear();
+  if (!Number.isInteger(year) || year < thisYear - 1 || year > thisYear + 1) throw new DomainError("Declarations can only be made for last year, this year or next year.");
+  for (const [k, v] of Object.entries(data)) {
+    if (!Number.isFinite(v) || v < 0) throw new DomainError(`${k} can't be negative.`);
+    if (v > 10_000_000) throw new DomainError(`${k} looks too large. Check the amount.`);
+  }
   const locked = await prisma.payslip.count({ where: { employeeId, period: { startsWith: `${year}-12` }, run: { status: { in: FINAL } } } });
   if (locked) throw new DomainError(`December ${year} payroll is finalised — declarations for ${year} are closed.`);
   return prisma.taxDeclaration.upsert({

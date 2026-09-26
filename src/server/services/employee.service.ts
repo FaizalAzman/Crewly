@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { parseNric } from "@/lib/nric";
 import { MINIMUM_WAGE } from "@/lib/statutory/employment-act";
 import { addDays, pick } from "@/lib/utils";
-import { assertCan, audit } from "../guard";
+import { assertActOnEmployee, assertCan, audit } from "../guard";
 import { DomainError, type Ctx } from "../types";
 import { initLeaveBalances } from "./leave.service";
 import { createChecklistFromTemplate } from "./lifecycle.service";
@@ -95,6 +95,24 @@ export function validateEmployeeRules(data: z.output<typeof employeeSchema>) {
   return out;
 }
 
+/** Every org reference on an employee must belong to the same workspace (and branch to the same legal entity). */
+async function assertOrgRefs(tenantId: string, companyId: string, d: { branchId?: string | null; departmentId?: string | null; positionId?: string | null; gradeId?: string | null; managerId?: string | null }) {
+  const [branch, dept, pos, grade, manager] = await Promise.all([
+    d.branchId ? prisma.branch.findFirst({ where: { id: d.branchId, tenantId } }) : null,
+    d.departmentId ? prisma.department.findFirst({ where: { id: d.departmentId, tenantId } }) : null,
+    d.positionId ? prisma.position.findFirst({ where: { id: d.positionId, tenantId } }) : null,
+    d.gradeId ? prisma.jobGrade.findFirst({ where: { id: d.gradeId, tenantId } }) : null,
+    d.managerId ? prisma.employee.findFirst({ where: { id: d.managerId, tenantId } }) : null,
+  ]);
+  if (d.branchId && !branch) throw new DomainError("Branch not found.");
+  if (branch && branch.companyId !== companyId) throw new DomainError("That branch belongs to a different legal entity.");
+  if (d.departmentId && !dept) throw new DomainError("Department not found.");
+  if (d.positionId && !pos) throw new DomainError("Position not found.");
+  if (d.gradeId && !grade) throw new DomainError("Job grade not found.");
+  if (d.managerId && !manager) throw new DomainError("Manager not found.");
+  if (manager && ["RESIGNED", "TERMINATED", "RETIRED"].includes(manager.status)) throw new DomainError("The manager has left the company. Pick someone current.");
+}
+
 export async function nextEmployeeNo(tenantId: string) {
   const count = await prisma.employee.count({ where: { tenantId } });
   let n = count + 1;
@@ -120,9 +138,7 @@ export async function createEmployee(ctx: Ctx, input: EmployeeInput, opts: { cre
   if (data.icNo && (await prisma.employee.findFirst({ where: { tenantId: ctx.tenantId, icNo: data.icNo, status: { notIn: ["RESIGNED", "TERMINATED", "RETIRED"] } } }))) {
     throw new DomainError("An active employee with that NRIC already exists.");
   }
-  if (data.managerId && !(await prisma.employee.findFirst({ where: { id: data.managerId, tenantId: ctx.tenantId } }))) {
-    throw new DomainError("Manager not found.");
-  }
+  await assertOrgRefs(ctx.tenantId, companyId, data);
 
   const employeeNo = data.employeeNo || (await nextEmployeeNo(ctx.tenantId));
   if (await prisma.employee.findFirst({ where: { tenantId: ctx.tenantId, employeeNo } })) throw new DomainError(`Employee number ${employeeNo} is taken.`);
@@ -191,7 +207,20 @@ export async function updateEmployee(ctx: Ctx, id: string, input: Partial<Employ
 
   const { employeeNo: _n, companyId, ...rest } = merged;
   void _n;
-  const updated = await prisma.employee.update({ where: { id }, data: { ...rest, companyId: companyId ?? existing.companyId, email: merged.email.toLowerCase() } });
+  const targetCompanyId = companyId ?? existing.companyId;
+  if (targetCompanyId !== existing.companyId && !(await prisma.company.findFirst({ where: { id: targetCompanyId, tenantId: ctx.tenantId } }))) {
+    throw new DomainError("Company not found.");
+  }
+  // Only re-validate references that change, so legacy rows (e.g. a manager who has since left) stay editable.
+  const changed = <K extends "branchId" | "departmentId" | "positionId" | "gradeId" | "managerId">(k: K) => (merged[k] !== existing[k] ? merged[k] : null);
+  await assertOrgRefs(ctx.tenantId, targetCompanyId, {
+    branchId: targetCompanyId !== existing.companyId ? merged.branchId : changed("branchId"),
+    departmentId: changed("departmentId"),
+    positionId: changed("positionId"),
+    gradeId: changed("gradeId"),
+    managerId: changed("managerId"),
+  });
+  const updated = await prisma.employee.update({ where: { id }, data: { ...rest, companyId: targetCompanyId, email: merged.email.toLowerCase() } });
 
   const changes: string[] = [];
   if (existing.basicSalary !== updated.basicSalary) changes.push(`salary RM${existing.basicSalary} → RM${updated.basicSalary}`);
@@ -242,8 +271,9 @@ export async function extendProbation(ctx: Ctx, id: string, months: number) {
 }
 
 export async function addChild(ctx: Ctx, employeeId: string, input: { name: string; dateOfBirth: Date; studying?: boolean; disabled?: boolean }) {
-  if (ctx.employeeId !== employeeId) assertCan(ctx, "employee.manage");
-  if (!input.name) throw new DomainError("Child's name is required.");
+  await assertActOnEmployee(ctx, employeeId, "employee.manage");
+  if (!input.name?.trim()) throw new DomainError("Child's name is required.");
+  if (!(input.dateOfBirth instanceof Date) || Number.isNaN(input.dateOfBirth.getTime())) throw new DomainError("Enter the child's date of birth.");
   if (input.dateOfBirth > new Date()) throw new DomainError("Date of birth can't be in the future.");
   return prisma.employeeChild.create({ data: { employeeId, ...input } });
 }
