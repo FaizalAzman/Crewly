@@ -9,6 +9,8 @@ import { holidayAppliesToState } from "@/lib/calendar";
 import { approvalScope } from "@/server/services/scope";
 import { can } from "@/lib/permissions";
 import { setupProgress } from "@/server/services/onboarding.service";
+import { gettingStarted } from "@/server/services/guide.service";
+import { GettingStarted } from "@/components/getting-started";
 import { Progress } from "@/components/ui";
 import { permitAlert } from "@/server/services/relations.service";
 import { MONTHS, ACTIVE_STATUSES } from "@/lib/constants";
@@ -52,8 +54,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
   // The session already loaded the tenant; these two don't depend on each other, so run them together.
   const tenant = (await getSessionUser())!.tenant;
-  const [setup, upcomingLeave] = await Promise.all([
-    can(ctx, "settings.manage") && !tenant.onboardedAt ? setupProgress(T, ctx.userId) : null,
+  const inSetup = can(ctx, "settings.manage") && !tenant.onboardedAt;
+  const [setup, guide, upcomingLeave] = await Promise.all([
+    inSetup ? setupProgress(T, ctx.userId) : null,
+    // Everyone else who lands here gets their role's "Getting started" checklist instead.
+    inSetup ? null : gettingStarted(ctx),
     seePay
       ? []
       : prisma.leaveRequest.findMany({
@@ -123,6 +128,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <Progress value={setup.percent} className="mt-2 bg-card" />
         </Link>
       )}
+
+      {guide && <GettingStarted guide={guide} />}
 
       {sp.welcome && (
         <div className="mb-6">

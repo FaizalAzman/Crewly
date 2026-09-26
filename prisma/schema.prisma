@@ -62,6 +62,7 @@ model User {
   sessionVersion Int     @default(0) // bumped to revoke every session (password change, "log out everywhere", deactivation)
   platformAdmin Boolean  @default(false) // Crewly operator (cross-tenant console)
   lastLoginAt  DateTime?
+  guideDismissedAt DateTime? // hid the "Getting started" checklist
   createdAt    DateTime  @default(now())
 
   notifications Notification[]

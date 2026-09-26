@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { DomainError } from "../types";
 import { claimTransition } from "../guard";
+import { ctxFromUser } from "../ctx";
+import { can, type Permission } from "@/lib/permissions";
 import { bootstrapTenant } from "./bootstrap.service";
 import { createHash, randomBytes } from "node:crypto";
 import { appUrl, sendMail } from "./mail.service";
@@ -124,11 +126,35 @@ export async function resetPassword(token: string, newPassword: string) {
   return row.user;
 }
 
-/** Sends a "set your password" invitation (valid 7 days). */
+/** What an invited person will be able to do, in plain words, for the invitation email. */
+export function inviteAbilities(user: Parameters<typeof ctxFromUser>[0]): string[] {
+  const ctx = ctxFromUser(user);
+  const out: string[] = [];
+  if (user.employeeId) out.push("see your payslips and Form EA, apply for leave, submit claims and clock in");
+  if (["leave.approve", "claims.approve", "overtime.approve"].some((p) => can(ctx, p as Permission))) out.push("approve leave, claims and overtime for your team");
+  if (can(ctx, "employee.manage")) out.push("manage employee records, letters, onboarding and offboarding");
+  if (can(ctx, "payroll.manage")) out.push("run payroll and prepare the KWSP, PERKESO and LHDN files");
+  if (can(ctx, "settings.manage")) out.push("manage workspace settings, users and roles");
+  if (!out.length) out.push("use the parts of Crewly your role gives you access to");
+  return out.map((s) => s[0].toUpperCase() + s.slice(1));
+}
+
+/** Sends a "set your password" invitation (valid 7 days), explaining what the person can do. */
 export async function sendInvite(userId: string, invitedBy: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { tenant: true } });
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { tenant: true, customRole: true } });
   const token = await issueToken(user.id, "INVITE", 24 * 7);
   const link = `${appUrl()}/reset-password?token=${token}&invite=1`;
-  await sendMail({ tenantId: user.tenantId, to: user.email, kind: "INVITE", subject: `${invitedBy} invited you to ${user.tenant.name} on Crewly`, body: `Hi ${user.name},\n\n${invitedBy} has given you access to ${user.tenant.name} on Crewly. Set your password within 7 days:\n${link}` });
+  const body = [
+    `Hi ${user.name},`,
+    "",
+    `${invitedBy} has given you access to ${user.tenant.name} on Crewly as ${ctxFromUser(user).roleLabel}. Set your password within 7 days:`,
+    link,
+    "",
+    "Once you're in, you can:",
+    ...inviteAbilities(user).map((a) => `• ${a}`),
+    "",
+    `A short "Getting started" checklist will be waiting when you first log in, and how-to guides are under Help & guides: ${appUrl()}/help`,
+  ].join("\n");
+  await sendMail({ tenantId: user.tenantId, to: user.email, kind: "INVITE", subject: `${invitedBy} invited you to ${user.tenant.name} on Crewly`, body });
   return process.env.NODE_ENV === "production" ? undefined : `/reset-password?token=${token}&invite=1`;
 }

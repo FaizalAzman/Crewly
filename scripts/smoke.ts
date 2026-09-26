@@ -22,7 +22,7 @@ async function main() {
   const letter = await prisma.generatedLetter.findFirst({ where: { tenantId: user.tenantId } });
 
   const routes = (process.env.ROUTES?.split(",") ?? [
-    "/dashboard", "/me", "/me/profile", "/me/leave", "/me/time", "/me/claims", "/me/payslips", "/me/tax", "/me/documents", "/approvals", "/directory",
+    "/dashboard", "/me", "/help", "/me/profile", "/me/leave", "/me/time", "/me/claims", "/me/payslips", "/me/tax", "/me/documents", "/approvals", "/directory",
     "/employees/import", "/onboarding?tab=templates", "/settings?tab=roles", "/documents?tab=letters&status=DRAFT", `/careers/${tenantSlug}`, `/careers/${tenantSlug}/${job?.id}`,
     "/api/export/employee-template",
     "/employees", "/employees/new", `/employees/${emp?.id}`, `/employees/${emp?.id}/edit`,

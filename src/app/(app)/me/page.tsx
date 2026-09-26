@@ -9,6 +9,9 @@ import { ApplyLeaveButton, ClaimButton, LoanButton, OvertimeButton } from "@/com
 import { available } from "@/server/services/leave.service";
 import { fmtDate, fmtTime, periodLabel, rm, todayMY } from "@/lib/utils";
 import { COMPANY_VALUES } from "@/lib/constants";
+import { can } from "@/lib/permissions";
+import { gettingStarted } from "@/server/services/guide.service";
+import { GettingStarted } from "@/components/getting-started";
 import { ackPolicyAction, clockInAction, clockOutAction, goalProgressAction, grievanceAction, kudosAction, myTaskAction, resignAction, selfReviewAction } from "./actions";
 
 export const metadata: Metadata = { title: "Me" };
@@ -19,6 +22,8 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
   const id = ctx.employeeId!;
   const today = todayMY();
   const year = today.getUTCFullYear();
+  // People who can open the dashboard see their checklist there; everyone else lands here. Runs alongside the rest.
+  const guidePromise = can(ctx, "employee.view") ? null : gettingStarted(ctx);
 
   const [emp, att, balances, lastSlip, anns, tasks, policies, reviews, goals, colleagues, kudos, openSep, letters, results] = await Promise.all([
     prisma.employee.findUniqueOrThrow({ where: { id }, include: { manager: true, department: true, branch: true } }),
@@ -37,6 +42,7 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
     prisma.performanceReview.findMany({ where: { employeeId: id, status: { in: ["CALIBRATION", "COMPLETED"] } }, include: { cycle: true }, orderBy: { updatedAt: "desc" }, take: 2 }),
   ]);
 
+  const guide = await guidePromise;
   const shown = balances.filter((b) => ["AL", "SL", "RL"].includes(b.leaveType.code) || b.taken > 0);
 
   return (
@@ -49,6 +55,8 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
           </Callout>
         </div>
       )}
+
+      {guide && <GettingStarted guide={guide} />}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6">
