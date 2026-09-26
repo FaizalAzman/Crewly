@@ -75,7 +75,7 @@ The seed creates 44 employees across two legal entities and three branches (KL, 
 
 There are five built-in roles: Owner, HR Admin, Payroll, Manager and Employee. You can add **custom roles** in `Settings → Roles` with any set of permissions and either company-wide or team scope. People below Owner can't grant permissions they don't hold themselves, and a workspace always keeps at least one owner.
 
-The full product plan is in [`docs/PLAN.md`](docs/PLAN.md).
+The full product plan is in [`docs/PLAN.md`](docs/PLAN.md). What to build next, with the Malaysian law behind each item, is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Statutory coverage
 
@@ -112,6 +112,8 @@ prisma/schema.prisma   ~60 models, multi-tenant (tenantId on every row)
 ```
 
 - **Stack:** Next.js 16 (App Router, Server Components, Server Actions, Route Handlers), TypeScript, Tailwind v4, Prisma 6 and SQLite (switch the `provider` to PostgreSQL for production), jose JWT sessions, bcrypt, zod, recharts.
+- **Integrity:** every "on behalf of" action checks that the target employee is in the tenant and, for team-scoped roles, in the actor's reporting line (`assertActOnEmployee`). Approvals, payroll payment, settlements and compensation use compare-and-set transitions (`claimTransition`), so a double click or two approvers can't apply money side effects twice.
+- **Speed:** `src/proxy.ts` redirects signed-out visitors before rendering, `loading.tsx` streams a skeleton on every navigation, per-request data is memoised with React `cache`, and every tenant and foreign-key filter is indexed.
 - **Security:** role-based permissions (`src/lib/permissions.ts`), manager-chain approvals, no self-approval, maker-checker on payroll, tenant scoping in every service, audit log (including personal-data exports), HttpOnly session cookies, masked NRIC for non-privileged roles.
 - **Branding** lives in one file: `src/lib/brand.ts`.
 
