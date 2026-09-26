@@ -10,6 +10,7 @@ import { str } from "@/lib/utils";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
 import { ctxFromUser } from "@/server/ctx";
+import { safeNext } from "@/lib/auth/safe-next";
 
 async function startSession(user: { id: string; tenantId: string; role: string }) {
   const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role });
@@ -29,7 +30,7 @@ export async function loginAction(_: ActionState, fd: FormData): Promise<ActionS
     const user = await authenticate(str(fd, "email"), str(fd, "password"));
     await startSession(user);
     const full = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, include: { customRole: true } });
-    landing = can(ctxFromUser(full), "employee.view") ? "/dashboard" : "/me";
+    landing = safeNext(str(fd, "next")) ?? (can(ctxFromUser(full), "employee.view") ? "/dashboard" : "/me");
   } catch (e) {
     if (e instanceof DomainError) return { ok: false, error: e.message };
     throw e;

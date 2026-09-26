@@ -16,7 +16,7 @@ const DEMO = [
   { label: "Employee", email: `danial@${BRAND.demoDomain}`, emoji: "🙋" },
 ];
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ reset?: string }> }) {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ reset?: string; next?: string }> }) {
   const sp = await searchParams;
   return (
     <div className="bg-dots grid min-h-screen lg:grid-cols-2">
@@ -29,6 +29,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           {sp.reset && <p className="mt-6 rounded-xl border-2 border-ink bg-lime px-3 py-2 text-sm font-bold">✅ Password saved. Log in with your new password.</p>}
           <div className="mt-8 rounded-3xl border-2 border-ink bg-card p-6 shadow-brutal-lg">
             <ActionForm action={loginAction} resetOnSuccess={false} className="space-y-4">
+              {sp.next && <input type="hidden" name="next" value={sp.next} />}
               <Field label="Work email">
                 <Input name="email" type="email" required placeholder="you@company.my" defaultValue={DEMO[0].email} />
               </Field>

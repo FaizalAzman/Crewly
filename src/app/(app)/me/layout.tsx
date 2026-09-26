@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { MeTabs } from "./me-tabs";
 import { requireCtx } from "@/server/context";
 import { EmptyState } from "@/components/ui";
 
@@ -11,7 +11,7 @@ const LINKS = [
   ["/me/payslips", "Payslips"],
   ["/me/tax", "Tax & reliefs"],
   ["/me/documents", "Documents"],
-];
+] as const;
 
 export default async function MeLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requireCtx();
@@ -20,13 +20,7 @@ export default async function MeLayout({ children }: { children: React.ReactNode
   }
   return (
     <>
-      <nav className="mb-5 flex gap-1 overflow-x-auto rounded-2xl border-2 border-ink bg-card p-1 shadow-brutal-sm">
-        {LINKS.map(([href, label]) => (
-          <Link key={href} href={href} className="whitespace-nowrap rounded-xl px-3.5 py-1.5 text-sm font-bold hover:bg-paper-2">
-            {label}
-          </Link>
-        ))}
-      </nav>
+      <MeTabs links={LINKS} />
       {children}
     </>
   );
