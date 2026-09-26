@@ -7,6 +7,7 @@ import {
   Menu,
   X,
   LayoutDashboard,
+  BookOpen,
   Smile,
   CheckCheck,
   Users,
@@ -46,7 +47,7 @@ import { Logo } from "../logo";
 import { cn } from "@/lib/utils";
 import type { NavGroup } from "./nav";
 
-const ICONS: Record<string, LucideIcon> = { LayoutDashboard, Smile, CheckCheck, Users, Network, Magnet, Rocket, DoorOpen, Palmtree, CalendarHeart, Fingerprint, CalendarClock, Timer, Banknote, ListPlus, Landmark, Receipt, Wallet, HandCoins, TrendingUp, HeartPulse, Target, GraduationCap, Gavel, ShieldAlert, Globe2, FileText, Laptop, PartyPopper, LifeBuoy, BarChart3, Settings, Circle, Contact };
+const ICONS: Record<string, LucideIcon> = { LayoutDashboard, Smile, CheckCheck, Users, Network, Magnet, Rocket, DoorOpen, Palmtree, CalendarHeart, Fingerprint, CalendarClock, Timer, Banknote, ListPlus, Landmark, Receipt, Wallet, HandCoins, TrendingUp, HeartPulse, Target, GraduationCap, Gavel, ShieldAlert, Globe2, FileText, Laptop, PartyPopper, LifeBuoy, BarChart3, Settings, Circle, Contact, BookOpen };
 
 export function Sidebar({ groups, badges, tenantName, plan }: { groups: NavGroup[]; badges: Record<string, number>; tenantName: string; plan: string }) {
   const pathname = usePathname();

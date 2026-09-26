@@ -3,7 +3,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { authenticate, signup } from "@/server/services/auth.service";
-import { SESSION_COOKIE, SESSION_TTL_SECONDS, signSession } from "@/lib/auth/session-token";
+import { SESSION_COOKIE } from "@/lib/auth/session-token";
+import { startSession } from "@/server/session";
 import { DomainError, type ActionState } from "@/server/types";
 import { ZodError } from "zod";
 import { str } from "@/lib/utils";
@@ -11,18 +12,6 @@ import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
 import { ctxFromUser } from "@/server/ctx";
 import { safeNext } from "@/lib/auth/safe-next";
-
-async function startSession(user: { id: string; tenantId: string; role: string }) {
-  const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role });
-  const store = await cookies();
-  store.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  });
-}
 
 export async function loginAction(_: ActionState, fd: FormData): Promise<ActionState> {
   let landing = "/me";

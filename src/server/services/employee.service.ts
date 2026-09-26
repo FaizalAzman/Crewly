@@ -165,6 +165,13 @@ export async function createEmployee(ctx: Ctx, input: EmployeeInput, opts: { cre
       history: { create: { effectiveDate: data.joinDate, type: "JOINED", title: `Joined as ${data.jobTitle}`, details: `Basic salary RM${data.basicSalary.toLocaleString()}` } },
     },
   });
+  // Re-check the plan limit now the row exists: two hires at the same moment could both pass the first check.
+  try {
+    await assertCanAddEmployees(ctx.tenantId, 0);
+  } catch (e) {
+    await prisma.employee.delete({ where: { id: employee.id } });
+    throw e;
+  }
 
   await initLeaveBalances(ctx.tenantId, employee.id, data.joinDate.getUTCFullYear() > new Date().getUTCFullYear() ? data.joinDate.getUTCFullYear() : new Date().getUTCFullYear());
   if (!opts.skipOnboarding) await createChecklistFromTemplate(ctx, employee.id, "ONBOARDING", data.joinDate);

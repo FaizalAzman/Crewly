@@ -81,6 +81,7 @@ export const NAV: NavGroup[] = [
     items: [
       { href: "/engagement", label: "Engagement", icon: "PartyPopper" },
       { href: "/helpdesk", label: "Helpdesk", icon: "LifeBuoy" },
+      { href: "/help", label: "Help & guides", icon: "BookOpen" },
     ],
   },
   {

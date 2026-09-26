@@ -12,7 +12,7 @@ const base = process.argv[3] ?? "http://localhost:3000";
 
 async function main() {
   const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-  const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role });
+  const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role, sv: user.sessionVersion });
   const emp = await prisma.employee.findFirst({ where: { tenantId: user.tenantId }, orderBy: { employeeNo: "asc" } });
   const run = await prisma.payrollRun.findFirst({ where: { tenantId: user.tenantId }, orderBy: { period: "desc" }, include: { payslips: { take: 1 } } });
   const job = await prisma.jobOpening.findFirst({ where: { tenantId: user.tenantId } });
@@ -22,7 +22,7 @@ async function main() {
   const letter = await prisma.generatedLetter.findFirst({ where: { tenantId: user.tenantId } });
 
   const routes = (process.env.ROUTES?.split(",") ?? [
-    "/dashboard", "/me", "/me/profile", "/me/leave", "/me/time", "/me/claims", "/me/payslips", "/me/tax", "/me/documents", "/approvals", "/directory",
+    "/dashboard", "/me", "/help", "/me/profile", "/me/leave", "/me/time", "/me/claims", "/me/payslips", "/me/tax", "/me/documents", "/approvals", "/directory",
     "/employees/import", "/onboarding?tab=templates", "/settings?tab=roles", "/documents?tab=letters&status=DRAFT", `/careers/${tenantSlug}`, `/careers/${tenantSlug}/${job?.id}`,
     "/api/export/employee-template",
     "/employees", "/employees/new", `/employees/${emp?.id}`, `/employees/${emp?.id}/edit`,

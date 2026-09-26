@@ -5,6 +5,7 @@ import { daysBetween, periodOf, round2, todayMY, utcDate } from "@/lib/utils";
 import { assertActOnEmployee, assertCan, assertCanApproveFor, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { employeeWorkState, holidaySet, tenantWorkWeek } from "./holiday.service";
+import { invalidateCalculatedRuns, periodsBetween } from "./payroll-inputs";
 
 type LeaveTypeRow = Awaited<ReturnType<typeof prisma.leaveType.findFirstOrThrow>>;
 type EmpRow = { joinDate: Date; gender: string; lastWorkingDate?: Date | null };
@@ -208,6 +209,7 @@ export async function approveLeave(ctx: Ctx, id: string, note?: string) {
     if (bal) await tx.leaveBalance.update({ where: { id: bal.id }, data: { pending: { decrement: r.days }, taken: { increment: r.days } } });
   });
   const updated = await prisma.leaveRequest.findUniqueOrThrow({ where: { id } });
+  if (!r.leaveType.paid) await invalidateCalculatedRuns(ctx.tenantId, { companyId: r.employee.companyId, periods: periodsBetween(r.startDate, r.endDate) });
   await notifyEmployee(r.employeeId, `Your ${r.leaveType.name} was approved ✅`, `${r.days} day(s)`, "/me/leave");
   await audit(ctx, "APPROVE", "LeaveRequest", id, `Approved ${r.employee.fullName}'s ${r.leaveType.code} (${r.days}d)`);
   return updated;
@@ -251,6 +253,7 @@ export async function cancelLeave(ctx: Ctx, id: string, opts: { today?: Date } =
     if (bal) await tx.leaveBalance.update({ where: { id: bal.id }, data: r.status === "PENDING" ? { pending: { decrement: r.days } } : { taken: { decrement: r.days } } });
   });
   const updated = await prisma.leaveRequest.findUniqueOrThrow({ where: { id } });
+  if (r.status === "APPROVED" && !r.leaveType.paid) await invalidateCalculatedRuns(ctx.tenantId, { companyId: r.employee.companyId, periods: periodsBetween(r.startDate, r.endDate) });
   await audit(ctx, "UPDATE", "LeaveRequest", id, `Cancelled ${r.employee.fullName}'s ${r.leaveType.code}`);
   return updated;
 }

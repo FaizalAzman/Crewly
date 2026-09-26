@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { parsePeriod, periodOf, round2, shiftPeriod, todayMY, utcDate } from "@/lib/utils";
 import { assertActOnEmployee, assertCan, assertCanApproveFor, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
+import { invalidateCalculatedRuns } from "./payroll-inputs";
 
 // ───────────── Claims ─────────────
 
@@ -321,6 +322,13 @@ export async function recordLoanRepayment(ctx: Ctx, loanId: string, amount: numb
   if (amt <= 0) throw new DomainError("Enter a positive amount.");
   if (amt > loan.balance) throw new DomainError(`That's more than the outstanding balance of RM${loan.balance.toFixed(2)}.`);
   if (!note.trim()) throw new DomainError("Record how it was repaid (e.g. bank transfer ref).");
+  // An approved (unpaid) payroll already deducts the old instalment; a calculated one gets sent back for recalculation.
+  const pending = await prisma.payslipLine.findMany({
+    where: { code: `LOAN:${loanId}`, payslip: { run: { tenantId: ctx.tenantId, status: { in: ["CALCULATED", "APPROVED"] } } } },
+    select: { payslip: { select: { runId: true, period: true, run: { select: { status: true } } } } },
+  });
+  const approved = pending.find((l) => l.payslip.run.status === "APPROVED");
+  if (approved) throw new DomainError(`Payroll ${approved.payslip.period} is approved and already deducts this loan. Record the repayment after it's paid, or reopen that payroll first.`);
   const balance = round2(loan.balance - amt);
   await prisma.$transaction(async (tx) => {
     await claimTransition(
@@ -330,8 +338,9 @@ export async function recordLoanRepayment(ctx: Ctx, loanId: string, amount: numb
     await tx.loanRepayment.create({ data: { loanId, period: periodOf(todayMY()), amount: amt } });
   });
   const updated = await prisma.loan.findUniqueOrThrow({ where: { id: loanId } });
+  const recalculate = await invalidateCalculatedRuns(ctx.tenantId, { runIds: pending.map((l) => l.payslip.runId) });
   await audit(ctx, "UPDATE", "Loan", loanId, `Manual repayment RM${amt} from ${loan.employee.fullName}: ${note}`);
-  return updated;
+  return Object.assign(updated, { recalculate });
 }
 
 export async function enrolBenefit(ctx: Ctx, planId: string, employeeId: string, dependants = 0) {

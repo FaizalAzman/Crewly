@@ -16,8 +16,9 @@ async function repayAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireCtx("loans.manage");
   return act(async () => {
     const l = await recordLoanRepayment(ctx, str(fd, "id"), numField(fd, "amount"), str(fd, "note"));
-    return l.status === "SETTLED" ? "Loan fully settled 🎉" : `Recorded. Balance now RM${l.balance.toFixed(2)}`;
-  }, ["/loans"]);
+    const done = l.status === "SETTLED" ? "Loan fully settled 🎉" : `Recorded. Balance now RM${l.balance.toFixed(2)}`;
+    return l.recalculate.length ? `${done} Payroll ${l.recalculate.join(", ")} went back to draft: recalculate it before approving.` : done;
+  }, ["/loans", "/payroll"]);
 }
 
 export const metadata: Metadata = { title: "Loans & advances" };

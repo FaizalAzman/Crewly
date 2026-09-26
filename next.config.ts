@@ -3,8 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Allow phones/tablets on the same Wi-Fi to load dev assets (HMR, chunks) via the LAN IP.
   allowedDevOrigins: ["192.168.1.141", "192.168.*.*", "10.*.*.*", "172.16.*.*", "*.local"],
-  // pdfkit reads its font metrics from node_modules at runtime; keep it out of the bundle.
-  serverExternalPackages: ["pdfkit"],
+  // pdfkit reads its font metrics from node_modules at runtime, and playwright-core drives a real Chromium
+  // (for PDFs that match the screen); keep both out of the bundle.
+  serverExternalPackages: ["pdfkit", "playwright-core"],
   // Don't advertise the framework version.
   poweredByHeader: false,
   async headers() {

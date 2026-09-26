@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { noticePeriodWeeks, ordinaryRateOfPay, serviceYears, terminationBenefit } from "@/lib/statutory/employment-act";
-import { addDays, daysBetween, periodOf, round2, todayMY } from "@/lib/utils";
+import { addDays, ageOn, daysBetween, periodOf, round2, todayMY } from "@/lib/utils";
 import { assertCan, audit, claimTransition, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
 import { unusedAnnualLeave } from "./leave.service";
@@ -123,6 +123,37 @@ export async function previewSeparation(ctx: Ctx, input: SeparationInput) {
   };
 }
 
+export const MINIMUM_RETIREMENT_AGE = 60; // Minimum Retirement Age Act 2012
+
+/**
+ * Separations the law protects against. Returns the reason it's blocked, or null.
+ *  - EA 1955 s.41A: no termination of a pregnant employee or one on maternity leave, except for misconduct
+ *    (proven through a disciplinary case ending in dismissal), wilful breach, or closure of the business.
+ *  - Minimum Retirement Age Act 2012: nobody can be retired before 60 (early retirement is the employee's choice,
+ *    recorded as a resignation or mutual separation).
+ */
+export async function protectedSeparationReason(tenantId: string, emp: { id: string; dateOfBirth: Date | null }, input: Pick<SeparationInput, "type" | "noticeDate" | "lastWorkingDate">) {
+  if (input.type === "RETIREMENT") {
+    if (!emp.dateOfBirth) return "Record the employee's date of birth first: retirement depends on age.";
+    if (ageOn(emp.dateOfBirth, input.lastWorkingDate) < MINIMUM_RETIREMENT_AGE) {
+      return `Employees can't be retired before age ${MINIMUM_RETIREMENT_AGE} (Minimum Retirement Age Act 2012). If they chose to retire early, record it as a resignation or mutual separation.`;
+    }
+  }
+  if (input.type === "TERMINATION" || input.type === "RETRENCHMENT") {
+    const maternity = await prisma.leaveRequest.findFirst({
+      where: { tenantId, employeeId: emp.id, status: { in: ["PENDING", "APPROVED"] }, endDate: { gte: input.noticeDate }, leaveType: { code: "ML" } },
+    });
+    if (maternity) {
+      if (input.type === "TERMINATION") {
+        const dismissal = await prisma.disciplinaryCase.findFirst({ where: { tenantId, employeeId: emp.id, outcome: "DISMISSAL" } });
+        if (dismissal) return null; // misconduct established through due process: permitted by s.41A
+      }
+      return "This employee has maternity leave booked or in progress. The Employment Act (s.41A) prohibits terminating her during pregnancy or maternity leave, except for proven misconduct (a disciplinary case ending in dismissal) or closure of the business.";
+    }
+  }
+  return null;
+}
+
 export async function createSeparation(ctx: Ctx, input: SeparationInput) {
   const own = ctx.employeeId === input.employeeId && input.type === "RESIGNATION";
   if (!own) assertCan(ctx, "lifecycle.manage");
@@ -130,6 +161,8 @@ export async function createSeparation(ctx: Ctx, input: SeparationInput) {
   if (open) throw new DomainError("There's already an open separation for this employee.");
   const p = await previewSeparation(ctx, input);
   if (["RESIGNED", "TERMINATED", "RETIRED"].includes(p.employee.status)) throw new DomainError("Employee has already left.");
+  const blocked = await protectedSeparationReason(ctx.tenantId, p.employee, input);
+  if (blocked) throw new DomainError(blocked);
 
   const sep = await prisma.separation.create({
     data: {

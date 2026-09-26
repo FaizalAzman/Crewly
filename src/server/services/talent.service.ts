@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { round2 } from "@/lib/utils";
 import { MINIMUM_WAGE } from "@/lib/statutory/employment-act";
-import { assertActOnEmployee, assertCan, audit, notifyEmployee } from "../guard";
+import { assertActOnEmployee, assertCan, audit, claimTransition, notifyEmployee } from "../guard";
 import { can } from "@/lib/permissions";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { createEmployee, type EmployeeInput } from "./employee.service";
@@ -169,7 +169,11 @@ export async function submitSelfReview(ctx: Ctx, reviewId: string, rating: numbe
   if (r.employeeId !== ctx.employeeId) throw new ForbiddenError("Only the employee can submit their self-review.");
   if (r.status !== "SELF_REVIEW") throw new DomainError("Self-review is already submitted.");
   if (rating < 1 || rating > 5) throw new DomainError("Rating must be 1 – 5.");
-  return prisma.performanceReview.update({ where: { id: reviewId }, data: { selfRating: rating, selfComment: comment, status: "MANAGER_REVIEW" } });
+  await claimTransition(
+    prisma.performanceReview.updateMany({ where: { id: reviewId, status: "SELF_REVIEW" }, data: { selfRating: rating, selfComment: comment, status: "MANAGER_REVIEW" } }),
+    "Self-review is already submitted.",
+  );
+  return prisma.performanceReview.findUniqueOrThrow({ where: { id: reviewId } });
 }
 
 export async function submitManagerReview(ctx: Ctx, reviewId: string, input: { rating: number; comment: string; strengths?: string; improvements?: string }) {
@@ -182,10 +186,14 @@ export async function submitManagerReview(ctx: Ctx, reviewId: string, input: { r
   if (input.rating < 1 || input.rating > 5) throw new DomainError("Rating must be 1 – 5.");
   const goals = await prisma.goal.findMany({ where: { employeeId: r.employeeId, cycleId: r.cycleId } });
   const final = finalRating(input.rating, goals.length ? weightedGoalScore(goals) : input.rating * 20);
-  const updated = await prisma.performanceReview.update({
-    where: { id: reviewId },
-    data: { managerRating: input.rating, managerComment: input.comment, strengths: input.strengths, improvements: input.improvements, finalRating: final, status: "CALIBRATION" },
-  });
+  await claimTransition(
+    prisma.performanceReview.updateMany({
+      where: { id: reviewId, status: "MANAGER_REVIEW" },
+      data: { managerRating: input.rating, managerComment: input.comment, strengths: input.strengths, improvements: input.improvements, finalRating: final, status: "CALIBRATION" },
+    }),
+    "Manager review already submitted.",
+  );
+  const updated = await prisma.performanceReview.findUniqueOrThrow({ where: { id: reviewId } });
   await notifyEmployee(r.employeeId, "Your manager has completed your review", undefined, "/me");
   return updated;
 }
@@ -195,7 +203,8 @@ export async function calibrate(ctx: Ctx, reviewId: string, finalRatingValue: nu
   if (finalRatingValue < 1 || finalRatingValue > 5) throw new DomainError("Rating must be 1 – 5.");
   const r = await prisma.performanceReview.findFirst({ where: { id: reviewId, tenantId: ctx.tenantId } });
   if (!r || r.status !== "CALIBRATION") throw new DomainError("Review isn't ready for calibration.");
-  return prisma.performanceReview.update({ where: { id: reviewId }, data: { finalRating: finalRatingValue, status: "COMPLETED" } });
+  await claimTransition(prisma.performanceReview.updateMany({ where: { id: reviewId, status: "CALIBRATION" }, data: { finalRating: finalRatingValue, status: "COMPLETED" } }), "This review was already calibrated.");
+  return prisma.performanceReview.findUniqueOrThrow({ where: { id: reviewId } });
 }
 
 // ───────────── Training & HRD Corp ─────────────

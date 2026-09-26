@@ -2,6 +2,9 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { DomainError } from "../types";
+import { claimTransition } from "../guard";
+import { ctxFromUser } from "../ctx";
+import { can, type Permission } from "@/lib/permissions";
 import { bootstrapTenant } from "./bootstrap.service";
 import { createHash, randomBytes } from "node:crypto";
 import { appUrl, sendMail } from "./mail.service";
@@ -115,17 +118,43 @@ export async function resetPassword(token: string, newPassword: string) {
   const row = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true } });
   if (!row || row.usedAt || row.expiresAt < new Date()) throw new DomainError("This link is invalid or has expired. Request a new one.");
   if (!row.user.active) throw new DomainError("This account is disabled.");
-  await prisma.user.update({ where: { id: row.userId }, data: { passwordHash: await hashPassword(newPassword) } });
+  // Spend the token first (compare-and-set), so the same link can't be used twice at once.
+  await claimTransition(prisma.passwordResetToken.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: new Date() } }), "This link has already been used. Request a new one.");
+  await prisma.user.update({ where: { id: row.userId }, data: { passwordHash: await hashPassword(newPassword), sessionVersion: { increment: 1 } } });
   await prisma.passwordResetToken.updateMany({ where: { userId: row.userId, usedAt: null }, data: { usedAt: new Date() } });
   await prisma.auditLog.create({ data: { tenantId: row.user.tenantId, userId: row.userId, userName: row.user.name, action: "UPDATE", entity: "User", entityId: row.userId, summary: `${row.user.name} ${row.purpose === "INVITE" ? "accepted an invitation" : "reset their password"}` } });
   return row.user;
 }
 
-/** Sends a "set your password" invitation (valid 7 days). */
+/** What an invited person will be able to do, in plain words, for the invitation email. */
+export function inviteAbilities(user: Parameters<typeof ctxFromUser>[0]): string[] {
+  const ctx = ctxFromUser(user);
+  const out: string[] = [];
+  if (user.employeeId) out.push("see your payslips and Form EA, apply for leave, submit claims and clock in");
+  if (["leave.approve", "claims.approve", "overtime.approve"].some((p) => can(ctx, p as Permission))) out.push("approve leave, claims and overtime for your team");
+  if (can(ctx, "employee.manage")) out.push("manage employee records, letters, onboarding and offboarding");
+  if (can(ctx, "payroll.manage")) out.push("run payroll and prepare the KWSP, PERKESO and LHDN files");
+  if (can(ctx, "settings.manage")) out.push("manage workspace settings, users and roles");
+  if (!out.length) out.push("use the parts of Crewly your role gives you access to");
+  return out.map((s) => s[0].toUpperCase() + s.slice(1));
+}
+
+/** Sends a "set your password" invitation (valid 7 days), explaining what the person can do. */
 export async function sendInvite(userId: string, invitedBy: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { tenant: true } });
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { tenant: true, customRole: true } });
   const token = await issueToken(user.id, "INVITE", 24 * 7);
   const link = `${appUrl()}/reset-password?token=${token}&invite=1`;
-  await sendMail({ tenantId: user.tenantId, to: user.email, kind: "INVITE", subject: `${invitedBy} invited you to ${user.tenant.name} on Crewly`, body: `Hi ${user.name},\n\n${invitedBy} has given you access to ${user.tenant.name} on Crewly. Set your password within 7 days:\n${link}` });
+  const body = [
+    `Hi ${user.name},`,
+    "",
+    `${invitedBy} has given you access to ${user.tenant.name} on Crewly as ${ctxFromUser(user).roleLabel}. Set your password within 7 days:`,
+    link,
+    "",
+    "Once you're in, you can:",
+    ...inviteAbilities(user).map((a) => `• ${a}`),
+    "",
+    `A short "Getting started" checklist will be waiting when you first log in, and how-to guides are under Help & guides: ${appUrl()}/help`,
+  ].join("\n");
+  await sendMail({ tenantId: user.tenantId, to: user.email, kind: "INVITE", subject: `${invitedBy} invited you to ${user.tenant.name} on Crewly`, body });
   return process.env.NODE_ENV === "production" ? undefined : `/reset-password?token=${token}&invite=1`;
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
@@ -284,7 +285,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     <TD className="text-right"><Money value={i.amount} /></TD>
                     <TD className="text-right"><Money value={i.sst} /></TD>
                     <TD><StatusBadge status={i.status} /></TD>
-                    <TD className="text-right"><a href={`/api/pdf/invoice/${i.id}`} className="text-xs font-bold underline">PDF</a></TD>
+                    <TD className="whitespace-nowrap text-right text-xs font-bold"><Link href={`/settings/invoices/${i.id}`} className="underline">View</Link> · <a href={`/api/pdf/invoice/${i.id}`} className="underline">PDF</a></TD>
                   </TR>
                 ))}
               </tbody>

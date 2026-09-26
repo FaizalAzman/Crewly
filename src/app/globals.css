@@ -45,6 +45,7 @@
   --font-sans: var(--font-body);
   --font-display: var(--font-display);
   --font-mono: var(--font-mono);
+  --font-serif: var(--font-letter), Georgia, serif;
 
   --shadow-brutal: var(--shadow);
   --shadow-brutal-sm: var(--shadow-sm);
@@ -131,6 +132,18 @@ input[type="checkbox"] {
   background: var(--lime);
   color: var(--ink);
 }
+
+/* Documents printed to PDF by headless Chromium (src/server/pdf/render.ts). They use the screen styles, so the
+   PDF looks exactly like the document on screen: one A4-wide sheet (210mm) on the app's paper background. */
+.pdf-render {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 10mm;
+  background: var(--paper);
+}
+.pdf-render .no-print { display: none !important; }
+.pdf-render .letter-page { box-decoration-break: clone; }
 
 @media print {
   @page { size: A4; margin: 18mm 16mm; }
