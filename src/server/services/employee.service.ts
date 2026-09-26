@@ -8,6 +8,7 @@ import { DomainError, type Ctx } from "../types";
 import { initLeaveBalances } from "./leave.service";
 import { createChecklistFromTemplate } from "./lifecycle.service";
 import { hashPassword } from "./auth.service";
+import { assertNoEscalation, resolveRoleKey } from "./roles.service";
 
 const AVATAR_COLORS = ["#FFD23F", "#C6F432", "#5CC8FF", "#FF8FD8", "#FF6B35", "#3DDC97", "#B69CFF", "#FFB4A2"];
 
@@ -245,18 +246,20 @@ export async function addChild(ctx: Ctx, employeeId: string, input: { name: stri
   return prisma.employeeChild.create({ data: { employeeId, ...input } });
 }
 
-export async function createLoginForEmployee(ctx: Ctx, employeeId: string, role: string, password: string) {
+export async function createLoginForEmployee(ctx: Ctx, employeeId: string, roleKey: string, password: string) {
   assertCan(ctx, "settings.manage");
   const e = await prisma.employee.findFirst({ where: { id: employeeId, tenantId: ctx.tenantId }, include: { user: true } });
   if (!e) throw new DomainError("Employee not found.");
   if (e.user) throw new DomainError("This employee already has a login.");
-  if (role === "OWNER" && ctx.role !== "OWNER") throw new DomainError("Only an owner can create another owner.");
+  const target = await resolveRoleKey(ctx, roleKey);
+  if (target.role === "OWNER" && ctx.role !== "OWNER") throw new DomainError("Only an owner can create another owner.");
+  assertNoEscalation(ctx, target.permissions);
   if (password.length < 8) throw new DomainError("Password must be at least 8 characters.");
   if (await prisma.user.findUnique({ where: { email: e.email } })) throw new DomainError("A user with this email already exists.");
   const user = await prisma.user.create({
-    data: { tenantId: ctx.tenantId, email: e.email, name: e.fullName, role, employeeId, passwordHash: await hashPassword(password) },
+    data: { tenantId: ctx.tenantId, email: e.email, name: e.fullName, role: target.role, customRoleId: target.customRoleId, employeeId, passwordHash: await hashPassword(password) },
   });
-  await audit(ctx, "CREATE", "User", user.id, `Created ${role} login for ${e.fullName}`);
+  await audit(ctx, "CREATE", "User", user.id, `Created ${target.label} login for ${e.fullName}`);
   return user;
 }
 
@@ -265,4 +268,38 @@ export function addMonths(d: Date, months: number) {
   // clamp (e.g. 31 Jan + 1 month → 28/29 Feb)
   if (r.getUTCDate() !== d.getUTCDate()) return addDays(new Date(Date.UTC(r.getUTCFullYear(), r.getUTCMonth(), 1)), -1);
   return r;
+}
+
+export interface OwnProfileInput {
+  phone?: string | null;
+  address?: string | null;
+  city?: string | null;
+  postcode?: string | null;
+  state?: string;
+  emergencyName?: string | null;
+  emergencyPhone?: string | null;
+  emergencyRelation?: string | null;
+  bankName?: string | null;
+  bankAccountNo?: string | null;
+}
+
+/**
+ * PDPA access & correction: employees may update their own contact, address, emergency contact and bank details.
+ * Identity, job and pay fields stay HR-controlled. Bank changes are audited and HR is notified (fraud control).
+ */
+export async function updateOwnProfile(ctx: Ctx, input: OwnProfileInput) {
+  if (!ctx.employeeId) throw new DomainError("Your login isn't linked to an employee profile.");
+  const e = await prisma.employee.findUniqueOrThrow({ where: { id: ctx.employeeId } });
+  if (input.postcode && !/^\d{5}$/.test(input.postcode)) throw new DomainError("Malaysian postcodes have 5 digits.");
+  if (input.bankAccountNo && !/^\d{6,20}$/.test(input.bankAccountNo.replace(/[\s-]/g, ""))) throw new DomainError("Bank account numbers are 6–20 digits.");
+  const allowed: (keyof OwnProfileInput)[] = ["phone", "address", "city", "postcode", "state", "emergencyName", "emergencyPhone", "emergencyRelation", "bankName", "bankAccountNo"];
+  const data = Object.fromEntries(allowed.filter((k) => input[k] !== undefined).map((k) => [k, k === "bankAccountNo" && input[k] ? String(input[k]).replace(/[\s-]/g, "") : input[k]]));
+  const bankChanged = (data.bankName !== undefined && data.bankName !== e.bankName) || (data.bankAccountNo !== undefined && data.bankAccountNo !== e.bankAccountNo);
+  const updated = await prisma.employee.update({ where: { id: e.id }, data });
+  await audit(ctx, "UPDATE", "Employee", e.id, `${e.fullName} updated own profile${bankChanged ? " (BANK DETAILS CHANGED)" : ""}`);
+  if (bankChanged) {
+    const hr = await prisma.user.findMany({ where: { tenantId: ctx.tenantId, active: true, role: { in: ["OWNER", "HR_ADMIN", "PAYROLL"] } } });
+    for (const u of hr) await prisma.notification.create({ data: { userId: u.id, title: `${e.fullName} changed their bank details`, body: "Verify before the next payroll.", link: `/employees/${e.id}?tab=pay` } });
+  }
+  return updated;
 }

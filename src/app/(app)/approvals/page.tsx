@@ -7,11 +7,16 @@ import { DecideButtons } from "@/components/decide-buttons";
 import { fmtDate, rm } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
 import { bulkApproveAction } from "./actions";
+import { redirect } from "next/navigation";
+import { can } from "@/lib/permissions";
+import { APPROVAL_PERMISSIONS } from "@/components/shell/nav";
+import { Attachment } from "@/components/attachment";
 
 export const metadata: Metadata = { title: "Approvals" };
 
 export default async function ApprovalsPage() {
-  const ctx = await requireCtx("claims.approve");
+  const ctx = await requireCtx();
+  if (!APPROVAL_PERMISSIONS.some((perm) => can(ctx, perm))) redirect("/me?denied=1");
   const p = await listPendingApprovals(ctx);
   const total = p.leave.length + p.claims.length + p.overtime.length + p.loans.length + p.compensation.length;
 
@@ -66,7 +71,7 @@ export default async function ApprovalsPage() {
                     <TD className="font-bold">{l.days}</TD>
                     <TD className="max-w-xs text-xs">
                       {l.reason}
-                      {l.attachment && <span className="block text-muted">📎 {l.attachment}</span>}
+                      {l.attachment && <span className="block"><Attachment value={l.attachment} label="Medical certificate" /></span>}
                     </TD>
                     <TD>
                       <DecideButtons kind="leave" id={l.id} />
@@ -105,7 +110,7 @@ export default async function ApprovalsPage() {
                     <TD className="max-w-xs text-xs">
                       {c.description}
                       {c.merchant && <span className="block text-muted">@ {c.merchant}</span>}
-                      {c.receiptUrl && <span className="block text-muted">📎 {c.receiptUrl}</span>}
+                      {c.receiptUrl && <span className="block"><Attachment value={c.receiptUrl} label="Receipt" /></span>}
                     </TD>
                     <TD className="text-right font-bold">
                       <Money value={c.amount} />

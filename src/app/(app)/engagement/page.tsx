@@ -4,7 +4,7 @@ import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
 import { Avatar, Badge, Card, CardBody, CardHeader, Checkbox, Field, Input, PageHeader, Progress, Select, StatCard, Tabs, Textarea } from "@/components/ui";
-import { ActionForm, FormModal, SubmitButton } from "@/components/forms";
+import { ActionButton, ActionForm, FormModal, SubmitButton } from "@/components/forms";
 import { DistributionChart } from "@/components/charts";
 import { act } from "@/server/action";
 import { enps, respondentKey, type SurveyQuestion } from "@/server/services/culture.service";
@@ -43,10 +43,35 @@ async function surveyCreateAction(_: ActionState, fd: FormData): Promise<ActionS
   });
 }
 
+async function surveyStatusAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("engagement.manage");
+  return act(async () => {
+    await prisma.survey.update({ where: { id: str(fd, "id"), tenantId: ctx.tenantId }, data: { status: str(fd, "status") } });
+    revalidatePath("/engagement");
+    return str(fd, "status") === "CLOSED" ? "Survey closed" : "Survey reopened";
+  });
+}
+
+async function announcementAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("engagement.manage");
+  return act(async () => {
+    const id = str(fd, "id");
+    if (str(fd, "op") === "delete") await prisma.announcement.delete({ where: { id, tenantId: ctx.tenantId } });
+    else {
+      const a = await prisma.announcement.findFirstOrThrow({ where: { id, tenantId: ctx.tenantId } });
+      await prisma.announcement.update({ where: { id }, data: { pinned: !a.pinned } });
+    }
+    revalidatePath("/engagement");
+    return "Updated";
+  });
+}
+
 export default async function EngagementPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const ctx = await requireCtx();
   const tab = (await searchParams).tab ?? "feed";
-  const manage = can(ctx.role, "engagement.manage");
+  const manage = can(ctx, "engagement.manage");
   const [anns, kudos, surveys, emps] = await Promise.all([
     prisma.announcement.findMany({ where: { tenantId: ctx.tenantId }, orderBy: [{ pinned: "desc" }, { publishedAt: "desc" }] }),
     prisma.kudos.findMany({ where: { tenantId: ctx.tenantId }, include: { from: true, to: true }, orderBy: { createdAt: "desc" }, take: 40 }),
@@ -102,6 +127,12 @@ export default async function EngagementPage({ searchParams }: { searchParams: P
                 <p className="font-display mt-2 text-xl font-extrabold">{a.title} {a.pinned && <Badge tone="ink">Pinned</Badge>}</p>
                 <p className="mt-1 text-sm text-ink-2">{a.body}</p>
                 <p className="mt-3 text-xs text-muted">{a.authorName} · {fmtDate(a.publishedAt, "long")}</p>
+                {manage && (
+                  <div className="mt-3 flex gap-2">
+                    <ActionButton action={announcementAction} fields={{ id: a.id, op: "pin" }}>{a.pinned ? "Unpin" : "Pin"}</ActionButton>
+                    <ActionButton action={announcementAction} fields={{ id: a.id, op: "delete" }} variant="ghost" confirm="Delete this announcement?">Delete</ActionButton>
+                  </div>
+                )}
               </CardBody>
             </Card>
           ))}
@@ -168,7 +199,18 @@ export default async function EngagementPage({ searchParams }: { searchParams: P
             const responded = ctx.employeeId ? s.responses.some((r) => r.respondentKey === respondentKey(s.id, ctx.employeeId!)) : true;
             return (
               <Card key={s.id}>
-                <CardHeader title={s.title} emoji="📋" subtitle={`${s.description ?? ""} · ${s.responses.length} responses${s.anonymous ? " · anonymous" : ""}${s.closesAt ? ` · closes ${fmtDate(s.closesAt)}` : ""}`} />
+                <CardHeader
+                  title={s.title}
+                  emoji="📋"
+                  subtitle={`${s.description ?? ""} · ${s.responses.length} responses${s.anonymous ? " · anonymous" : ""}${s.closesAt ? ` · closes ${fmtDate(s.closesAt)}` : ""}`}
+                  action={
+                    manage && (
+                      <ActionButton action={surveyStatusAction} fields={{ id: s.id, status: s.status === "OPEN" ? "CLOSED" : "OPEN" }} confirm={s.status === "OPEN" ? "Close this survey to new responses?" : undefined}>
+                        {s.status === "OPEN" ? "Close survey" : "Reopen"}
+                      </ActionButton>
+                    )
+                  }
+                />
                 <CardBody>
                   <div className="grid gap-6 lg:grid-cols-2">
                     {!responded && s.status === "OPEN" && (

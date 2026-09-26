@@ -32,8 +32,10 @@ model Tenant {
   accentColor     String   @default("#FF6B35")
   createdAt       DateTime @default(now())
 
-  users      User[]
-  companies  Company[]
+  users       User[]
+  customRoles CustomRole[]
+  uploads     Upload[]
+  companies   Company[]
   employees  Employee[]
   invoices   Invoice[]
   auditLogs  AuditLog[]
@@ -46,7 +48,9 @@ model User {
   email        String    @unique
   passwordHash String
   name         String
-  role         String    @default("EMPLOYEE") // OWNER | HR_ADMIN | PAYROLL | MANAGER | EMPLOYEE
+  role         String    @default("EMPLOYEE") // OWNER | HR_ADMIN | PAYROLL | MANAGER | EMPLOYEE | CUSTOM
+  customRoleId String?
+  customRole   CustomRole? @relation(fields: [customRoleId], references: [id], onDelete: SetNull)
   employeeId   String?   @unique
   employee     Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   active       Boolean   @default(true)
@@ -54,6 +58,36 @@ model User {
   createdAt    DateTime  @default(now())
 
   notifications Notification[]
+}
+
+/// Tenant-defined role: a named bundle of permissions plus a data scope.
+model CustomRole {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  permissions String // JSON array of permission keys
+  scope       String   @default("TEAM") // ALL (whole company) | TEAM (own reporting line)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+
+  @@unique([tenantId, name])
+}
+
+/// Uploaded file (receipts, MCs, documents, resumes). Bytes live on disk under storage/.
+model Upload {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fileName     String
+  mimeType     String
+  size         Int
+  storagePath  String
+  uploadedById String?
+  purpose      String   @default("GENERAL") // RECEIPT | LEAVE | DOCUMENT | RESUME | GENERAL
+  createdAt    DateTime @default(now())
 }
 
 model AuditLog {
@@ -112,6 +146,15 @@ model Company {
   state         String  @default("SELANGOR")
   phone         String?
   isDefault     Boolean @default(false)
+  // Letterhead (applied to every letter issued under this entity)
+  letterheadLogo    String? // uploaded image URL
+  letterheadColor   String  @default("#16140F")
+  letterheadLayout  String  @default("LEFT") // LEFT | CENTER | RIGHT
+  letterheadContact String? // e.g. "hr@company.my · www.company.my"
+  letterheadFooter  String? // e.g. registered office / confidentiality line
+  signatoryName     String?
+  signatoryTitle    String?
+  signatureImage    String? // uploaded image URL
   createdAt     DateTime @default(now())
 
   branches    Branch[]
@@ -861,6 +904,7 @@ model Separation {
   cp22aSubmitted     Boolean  @default(false)
   exitInterview      String?
   rehireEligible     Boolean  @default(true)
+  settlementPeriod   String? // payroll period the final settlement was posted to
   createdAt          DateTime @default(now())
 }
 
@@ -1047,6 +1091,10 @@ model GeneratedLetter {
   employee   Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   title      String
   content    String
+  status     String         @default("DRAFT") // DRAFT | ISSUED | ACKNOWLEDGED
+  issuedAt   DateTime?
+  issuedBy   String?
+  acknowledgedAt DateTime?
   createdAt  DateTime       @default(now())
 }
 

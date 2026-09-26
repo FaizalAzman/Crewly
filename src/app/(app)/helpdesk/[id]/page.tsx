@@ -25,7 +25,7 @@ async function statusAction(_: ActionState, fd: FormData): Promise<ActionState> 
 export default async function TicketPage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireCtx();
   const { id } = await params;
-  const agent = can(ctx.role, "helpdesk.manage");
+  const agent = can(ctx, "helpdesk.manage");
   const t = await prisma.ticket.findFirst({
     where: { id, tenantId: ctx.tenantId, ...(agent ? {} : { employeeId: ctx.employeeId ?? "-" }) },
     include: { employee: true, comments: { where: agent ? {} : { internal: false }, orderBy: { createdAt: "asc" } } },

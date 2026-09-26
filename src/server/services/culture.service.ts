@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { fmtDate, rm } from "@/lib/utils";
 import { assertCan, audit, notifyEmployee } from "../guard";
-import { DomainError, type Ctx } from "../types";
+import { can } from "@/lib/permissions";
+import { DomainError, ForbiddenError, type Ctx } from "../types";
 
 // ───────────── Letters (merge fields) ─────────────
 
@@ -36,11 +37,69 @@ export async function generateLetter(ctx: Ctx, templateId: string, employeeId: s
   const content = mergeTemplate(tpl.body, {
     employee: { ...emp, department: emp.department?.name ?? "", preferredName: emp.preferredName ?? emp.fullName },
     company: emp.company,
-    extra: { today: fmtDate(new Date(), "long"), signatory: ctx.userName, effectiveDate: fmtDate(new Date(), "long"), ...extra },
+    extra: {
+      today: fmtDate(new Date(), "long"),
+      signatory: emp.company.signatoryName || ctx.userName,
+      signatoryTitle: emp.company.signatoryTitle ?? "",
+      effectiveDate: fmtDate(new Date(), "long"),
+      ...extra,
+    },
   });
   const letter = await prisma.generatedLetter.create({ data: { tenantId: ctx.tenantId, templateId, employeeId, title: `${tpl.name} — ${emp.fullName}`, content } });
   await audit(ctx, "CREATE", "Letter", letter.id, `Generated "${tpl.name}" for ${emp.fullName}`);
   return letter;
+}
+
+async function loadLetter(ctx: Ctx, id: string) {
+  const l = await prisma.generatedLetter.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: true } });
+  if (!l) throw new DomainError("Letter not found.");
+  return l;
+}
+
+/** Drafts can be edited (e.g. to fill in the details of a warning) before they're issued. */
+export async function updateLetter(ctx: Ctx, id: string, content: string, title?: string) {
+  assertCan(ctx, "documents.manage");
+  const l = await loadLetter(ctx, id);
+  if (l.status !== "DRAFT") throw new DomainError("Issued letters can't be edited. Generate a new one instead.");
+  if (!content.trim()) throw new DomainError("The letter can't be empty.");
+  if (/\[missing: /.test(content)) throw new DomainError("Fill in the [missing: …] fields before saving.");
+  return prisma.generatedLetter.update({ where: { id }, data: { content, title: title?.trim() || l.title } });
+}
+
+/** Issue: freezes the content, notifies the employee and shows it in their Me → Documents. */
+export async function issueLetter(ctx: Ctx, id: string) {
+  assertCan(ctx, "documents.manage");
+  const l = await loadLetter(ctx, id);
+  if (l.status !== "DRAFT") throw new DomainError("This letter has already been issued.");
+  const left = unresolvedPlaceholders(l.content);
+  if (left.length) throw new DomainError(`Complete the placeholders before issuing: ${left.join(", ")}`);
+  const updated = await prisma.generatedLetter.update({ where: { id }, data: { status: "ISSUED", issuedAt: new Date(), issuedBy: ctx.userName } });
+  await notifyEmployee(l.employeeId, `You have a new letter: ${l.title.split(" — ")[0]}`, "Please read and acknowledge it.", "/me/documents");
+  await audit(ctx, "UPDATE", "Letter", id, `Issued "${l.title}"`);
+  return updated;
+}
+
+export async function acknowledgeLetter(ctx: Ctx, id: string) {
+  const l = await loadLetter(ctx, id);
+  if (l.employeeId !== ctx.employeeId) throw new ForbiddenError("Only the recipient can acknowledge this letter.");
+  if (l.status !== "ISSUED") throw new DomainError(l.status === "ACKNOWLEDGED" ? "Already acknowledged." : "This letter hasn't been issued yet.");
+  return prisma.generatedLetter.update({ where: { id }, data: { status: "ACKNOWLEDGED", acknowledgedAt: new Date() } });
+}
+
+export async function deleteLetter(ctx: Ctx, id: string) {
+  assertCan(ctx, "documents.manage");
+  const l = await loadLetter(ctx, id);
+  if (l.status !== "DRAFT") throw new DomainError("Issued letters are part of the employee record and can't be deleted.");
+  await prisma.generatedLetter.delete({ where: { id } });
+}
+
+/** Who may read a letter: document managers, or the recipient once it's issued. */
+export async function readableLetter(ctx: Ctx, id: string) {
+  const l = await prisma.generatedLetter.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: { include: { company: true } } } });
+  if (!l) return null;
+  if (ctx.permissions.includes("documents.manage")) return l;
+  if (l.employeeId === ctx.employeeId && l.status !== "DRAFT") return l;
+  return null;
 }
 
 export async function acknowledgePolicy(ctx: Ctx, policyId: string) {
@@ -127,7 +186,7 @@ export async function openTicket(ctx: Ctx, input: { category: string; subject: s
 export async function commentTicket(ctx: Ctx, ticketId: string, body: string, internal: boolean) {
   const t = await prisma.ticket.findFirst({ where: { id: ticketId, tenantId: ctx.tenantId } });
   if (!t) throw new DomainError("Ticket not found.");
-  const isAgent = ctx.role === "OWNER" || ctx.role === "HR_ADMIN";
+  const isAgent = can(ctx, "helpdesk.manage");
   if (!isAgent && t.employeeId !== ctx.employeeId) throw new DomainError("Ticket not found.");
   if (internal && !isAgent) throw new DomainError("Only HR can add internal notes.");
   if (!body.trim()) throw new DomainError("Write a message first.");
@@ -144,4 +203,9 @@ export async function setTicketStatus(ctx: Ctx, ticketId: string, status: string
   const t = await prisma.ticket.findFirst({ where: { id: ticketId, tenantId: ctx.tenantId } });
   if (!t) throw new DomainError("Ticket not found.");
   return prisma.ticket.update({ where: { id: ticketId }, data: { status, assignee: assignee ?? t.assignee } });
+}
+
+/** Placeholders a human must fill before a letter can be issued, e.g. "[describe matter]" or "[missing: employee.address]". */
+export function unresolvedPlaceholders(content: string): string[] {
+  return [...new Set(content.match(/\[(?:missing:[^\]]*|describe[^\]]*|insert[^\]]*|enter[^\]]*)\]/gi) ?? [])];
 }

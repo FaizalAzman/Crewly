@@ -128,8 +128,11 @@ We are delighted to offer you the position of {{employee.jobTitle}} in the {{emp
 Please sign and return a copy of this letter as your acceptance.
 
 Yours sincerely,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
   {
     name: "Confirmation of Employment",
@@ -145,8 +148,11 @@ We are pleased to inform you that you have successfully completed your probation
 All other terms and conditions of your employment remain unchanged. Thank you for your contributions — here's to many more wins together! 🎉
 
 Yours sincerely,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
   {
     name: "Salary Increment Letter",
@@ -162,8 +168,11 @@ In recognition of your performance, we are pleased to inform you that your month
 Keep up the great work!
 
 Yours sincerely,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
   {
     name: "Show Cause Letter",
@@ -186,8 +195,11 @@ You are hereby required to show cause in writing within 72 hours of receiving th
 Failure to reply within the stipulated time will be deemed as having no explanation to offer, and the Company may proceed with appropriate action.
 
 Yours faithfully,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
   {
     name: "Warning Letter",
@@ -207,8 +219,11 @@ You are reminded that any repetition of such conduct may result in more severe d
 Please sign the duplicate copy as acknowledgement of receipt.
 
 Yours faithfully,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
   {
     name: "Certificate of Service",
@@ -224,8 +239,11 @@ This is to certify that {{employee.fullName}} (NRIC: {{employee.icNo}}) was empl
 During the employment, {{employee.preferredName}} was a valued member of the team. We wish {{employee.preferredName}} every success in future endeavours.
 
 Yours faithfully,
+
+[signature]
 {{signatory}}
-for {{company.name}}`,
+{{signatoryTitle}}
+{{company.name}}`,
   },
 ];
 

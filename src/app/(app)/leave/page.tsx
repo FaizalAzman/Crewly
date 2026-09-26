@@ -12,6 +12,7 @@ import { addDays, fmtDate, parsePeriod, periodOf, shiftPeriod, todayMY, toISODat
 import { holidayAppliesToState } from "@/lib/calendar";
 import { humanize, MONTHS } from "@/lib/constants";
 import { scopedEmployeeWhere } from "@/server/services/scope";
+import { Attachment } from "@/components/attachment";
 import { adjustBalanceAction, carryForwardAction, creditRlAction, recalcEntitlementsAction, saveLeaveTypeAction } from "./actions";
 
 export const metadata: Metadata = { title: "Leave" };
@@ -20,7 +21,7 @@ export default async function LeavePage({ searchParams }: { searchParams: Promis
   const ctx = await requireCtx("leave.approve");
   const sp = await searchParams;
   const tab = sp.tab ?? "requests";
-  const manage = can(ctx.role, "leave.manage");
+  const manage = can(ctx, "leave.manage");
   const year = todayMY().getUTCFullYear();
   const scope = await scopedEmployeeWhere(ctx);
   const [pendingCount, onLeaveToday, types] = await Promise.all([
@@ -127,6 +128,7 @@ async function Requests({ ctx, status }: { ctx: Awaited<ReturnType<typeof requir
                 <TD className="max-w-xs text-xs">
                   {r.reason}
                   {r.approverNote && <span className="block text-muted">↳ {r.approverNote}</span>}
+                  {r.attachment && <span className="block"><Attachment value={r.attachment} label="Supporting document" /></span>}
                 </TD>
                 <TD>
                   <StatusBadge status={r.status} />

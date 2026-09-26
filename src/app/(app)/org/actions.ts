@@ -4,6 +4,7 @@ import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { audit } from "@/server/guard";
+import { deleteOrgUnit, setDefaultCompany, type OrgEntity } from "@/server/services/org.service";
 import { DomainError, type ActionState } from "@/server/types";
 import { boolField, numField, optStr, str } from "@/lib/utils";
 
@@ -88,5 +89,21 @@ export async function saveGradeAction(_: ActionState, fd: FormData): Promise<Act
     if (id) await prisma.jobGrade.update({ where: { id }, data });
     else await prisma.jobGrade.create({ data: { ...data, tenantId: ctx.tenantId } });
     return "Grade saved";
+  }, P);
+}
+
+export async function deleteOrgAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("org.manage");
+  return act(async () => {
+    await deleteOrgUnit(ctx, str(fd, "kind") as OrgEntity, str(fd, "id"));
+    return "Deleted";
+  }, P);
+}
+
+export async function defaultCompanyAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("org.manage");
+  return act(async () => {
+    await setDefaultCompany(ctx, str(fd, "id"));
+    return "Default entity updated";
   }, P);
 }

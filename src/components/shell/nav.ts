@@ -4,7 +4,8 @@ export interface NavItem {
   href: string;
   label: string;
   icon: string; // lucide icon name, resolved in Sidebar
-  permission?: Permission;
+  /** Visible when the user has this permission (or any of them, if an array). */
+  permission?: Permission | Permission[];
   badgeKey?: string;
 }
 
@@ -13,19 +14,22 @@ export interface NavGroup {
   items: NavItem[];
 }
 
+export const APPROVAL_PERMISSIONS: Permission[] = ["leave.approve", "claims.approve", "overtime.approve", "loans.manage", "compensation.manage"];
+
 export const NAV: NavGroup[] = [
   {
     label: "Home",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: "LayoutDashboard", permission: "employee.view" },
       { href: "/me", label: "Me", icon: "Smile" },
-      { href: "/approvals", label: "Approvals", icon: "CheckCheck", permission: "claims.approve", badgeKey: "approvals" },
+      { href: "/approvals", label: "Approvals", icon: "CheckCheck", permission: APPROVAL_PERMISSIONS, badgeKey: "approvals" },
     ],
   },
   {
     label: "People",
     items: [
       { href: "/employees", label: "Employees", icon: "Users", permission: "employee.view" },
+      { href: "/directory", label: "Directory", icon: "Contact" },
       { href: "/org", label: "Organization", icon: "Network", permission: "org.manage" },
       { href: "/recruitment", label: "Recruitment", icon: "Magnet", permission: "recruitment.manage" },
       { href: "/onboarding", label: "Onboarding", icon: "Rocket", permission: "lifecycle.manage" },

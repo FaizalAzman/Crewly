@@ -26,6 +26,7 @@ async function permitAction(_: ActionState, fd: FormData): Promise<ActionState> 
       issueDate: dateField(fd, "issueDate") as Date,
       expiryDate: dateField(fd, "expiryDate") as Date,
       levyAmount: numField(fd, "levyAmount"),
+      levyPaidUntil: dateField(fd, "levyPaidUntil"),
       fomemaDate: dateField(fd, "fomemaDate"),
       fomemaStatus: str(fd, "fomemaStatus") || "PENDING",
       insuranceNo: optStr(fd, "insuranceNo"),
@@ -57,6 +58,7 @@ export default async function ForeignWorkersPage() {
       <Field label="Issue date"><Input type="date" name="issueDate" defaultValue={p ? toISODate(p.issueDate) : ""} required /></Field>
       <Field label="Expiry date"><Input type="date" name="expiryDate" defaultValue={p ? toISODate(p.expiryDate) : ""} required /></Field>
       <Field label="Annual levy (RM)"><Input type="number" name="levyAmount" defaultValue={p?.levyAmount ?? 1850} /></Field>
+      <Field label="Levy paid until"><Input type="date" name="levyPaidUntil" defaultValue={p?.levyPaidUntil ? toISODate(p.levyPaidUntil) : ""} /></Field>
       <Field label="FOMEMA status"><Select name="fomemaStatus" defaultValue={p?.fomemaStatus} options={["PENDING", "FIT", "UNFIT"]} /></Field>
       <Field label="FOMEMA date"><Input type="date" name="fomemaDate" defaultValue={p?.fomemaDate ? toISODate(p.fomemaDate) : ""} /></Field>
       <Field label="SPIKPA / insurance no."><Input name="insuranceNo" defaultValue={p?.insuranceNo ?? ""} /></Field>
@@ -98,7 +100,10 @@ export default async function ForeignWorkersPage() {
                   </TD>
                   <TD className="text-xs">{p.employee.passportExpiry ? <>{fmtDate(p.employee.passportExpiry)} {!passportOk && <Badge tone="orange">&lt;18 mo</Badge>}</> : "-"}</TD>
                   <TD><Badge tone={p.fomemaStatus === "FIT" ? "green" : p.fomemaStatus === "UNFIT" ? "red" : "yellow"}>{p.fomemaStatus}</Badge></TD>
-                  <TD className="text-right"><Money value={p.levyAmount} /></TD>
+                  <TD className="text-right">
+                    <Money value={p.levyAmount} />
+                    <span className="block text-[11px]">{p.levyPaidUntil ? (p.levyPaidUntil < today ? <Badge tone="red">Levy lapsed</Badge> : `paid to ${fmtDate(p.levyPaidUntil)}`) : <Badge tone="yellow">Levy unpaid</Badge>}</span>
+                  </TD>
                   <TD><FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title="Edit permit" action={permitAction} wide>{form(p)}</FormModal></TD>
                 </TR>
               );

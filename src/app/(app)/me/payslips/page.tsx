@@ -64,6 +64,7 @@ export default async function MyPayslipsPage() {
                     <TD className="text-right font-bold"><Money value={s.netPay} /></TD>
                     <TD className="text-right">
                       <Link href={`/me/payslips/${s.id}`} className="text-xs font-bold underline">View</Link>
+                      <a href={`/api/pdf/payslip/${s.id}`} className="ml-3 text-xs font-bold underline">PDF</a>
                     </TD>
                   </TR>
                 ))}

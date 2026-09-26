@@ -243,3 +243,46 @@ export async function rejectCompensation(ctx: Ctx, id: string) {
 export function compaRatio(salary: number, mid: number) {
   return mid ? round2(salary / mid) : 0;
 }
+
+/** Manual / early repayment outside payroll (cash, bank transfer, set-off). */
+export async function recordLoanRepayment(ctx: Ctx, loanId: string, amount: number, note: string) {
+  assertCan(ctx, "loans.manage");
+  const loan = await prisma.loan.findFirst({ where: { id: loanId, tenantId: ctx.tenantId }, include: { employee: true } });
+  if (!loan) throw new DomainError("Loan not found.");
+  if (loan.status !== "ACTIVE") throw new DomainError("Only active loans can be repaid.");
+  const amt = round2(amount);
+  if (amt <= 0) throw new DomainError("Enter a positive amount.");
+  if (amt > loan.balance) throw new DomainError(`That's more than the outstanding balance of RM${loan.balance.toFixed(2)}.`);
+  if (!note.trim()) throw new DomainError("Record how it was repaid (e.g. bank transfer ref).");
+  const balance = round2(loan.balance - amt);
+  await prisma.loanRepayment.create({ data: { loanId, period: periodOf(todayMY()), amount: amt } });
+  const updated = await prisma.loan.update({ where: { id: loanId }, data: { balance, status: balance === 0 ? "SETTLED" : "ACTIVE" } });
+  await audit(ctx, "UPDATE", "Loan", loanId, `Manual repayment RM${amt} from ${loan.employee.fullName}: ${note}`);
+  return updated;
+}
+
+export async function enrolBenefit(ctx: Ctx, planId: string, employeeId: string, dependants = 0) {
+  assertCan(ctx, "benefits.manage");
+  const [plan, emp] = await Promise.all([
+    prisma.benefitPlan.findFirst({ where: { id: planId, tenantId: ctx.tenantId } }),
+    prisma.employee.findFirst({ where: { id: employeeId, tenantId: ctx.tenantId } }),
+  ]);
+  if (!plan || !emp) throw new DomainError("Plan or employee not found.");
+  if (dependants < 0 || dependants > 10) throw new DomainError("Dependants must be 0 – 10.");
+  if (dependants > 0 && !plan.coversDependants) throw new DomainError(`${plan.name} doesn't cover dependants.`);
+  if (await prisma.benefitEnrollment.findUnique({ where: { planId_employeeId: { planId, employeeId } } })) throw new DomainError("Already enrolled.");
+  return prisma.benefitEnrollment.create({ data: { planId, employeeId, dependants, startDate: todayMY() } });
+}
+
+/** Records benefit usage (e.g. an outpatient visit) against the per-person annual limit. */
+export async function recordBenefitUsage(ctx: Ctx, enrollmentId: string, amount: number) {
+  assertCan(ctx, "benefits.manage");
+  const en = await prisma.benefitEnrollment.findUnique({ where: { id: enrollmentId }, include: { plan: true, employee: true } });
+  if (!en || en.plan.tenantId !== ctx.tenantId) throw new DomainError("Enrolment not found.");
+  const amt = round2(amount);
+  if (amt <= 0) throw new DomainError("Enter a positive amount.");
+  const remaining = round2(en.plan.annualLimit - en.utilised);
+  if (amt > remaining) throw new DomainError(`Exceeds the annual limit. Only RM${remaining.toFixed(2)} remains for ${en.employee.fullName}.`);
+  await audit(ctx, "UPDATE", "Benefit", enrollmentId, `Recorded RM${amt} ${en.plan.name} usage for ${en.employee.fullName}`);
+  return prisma.benefitEnrollment.update({ where: { id: enrollmentId }, data: { utilised: round2(en.utilised + amt) } });
+}

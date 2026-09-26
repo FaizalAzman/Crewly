@@ -23,7 +23,7 @@ export default async function OvertimePage() {
   const nearCap = [...byEmp.values()].filter((v) => v.hours > MAX_MONTHLY_OT_HOURS * 0.75);
   return (
     <>
-      <PageHeader title="Overtime" emoji="⏱️" subtitle="EA s.60A rates: 1.5× normal day, 2× rest day, 3× public holiday. Hourly rate = (monthly ÷ 26) ÷ normal hours." actions={can(ctx.role, "attendance.manage") && <OvertimeButton tenantId={ctx.tenantId} onBehalf btn={{ label: "+ OT on behalf", variant: "primary" }} />} />
+      <PageHeader title="Overtime" emoji="⏱️" subtitle="EA s.60A rates: 1.5× normal day, 2× rest day, 3× public holiday. Hourly rate = (monthly ÷ 26) ÷ normal hours." actions={can(ctx, "attendance.manage") && <OvertimeButton tenantId={ctx.tenantId} onBehalf btn={{ label: "+ OT on behalf", variant: "primary" }} />} />
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Pending" value={rows.filter((r) => r.status === "PENDING").length} tone="sunny" emoji="⏳" />
         <StatCard label="Hours this month" value={month.reduce((s, r) => s + r.hours, 0).toFixed(1)} tone="sky" emoji="⌛" />

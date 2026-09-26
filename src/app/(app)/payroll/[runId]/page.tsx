@@ -4,9 +4,9 @@ import { Download } from "lucide-react";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
-import { Callout, Card, CardBody, CardHeader, Field, Input, LinkButton, Money, PageHeader, PersonCell, Select, StatCard, StatusBadge, Table, TD, TH, THead, TR, btnClass } from "@/components/ui";
+import { Badge, Callout, Card, CardBody, CardHeader, Field, Input, LinkButton, Money, PageHeader, PersonCell, Select, StatCard, StatusBadge, Table, TD, TH, THead, TR, btnClass } from "@/components/ui";
 import { ActionButton, FormModal } from "@/components/forms";
-import { fmtDate, periodLabel, rm } from "@/lib/utils";
+import { fmtDate, periodLabel, rm, shiftPeriod } from "@/lib/utils";
 import { adjustmentAction, removeAdjustmentAction, runStepAction } from "../actions";
 
 const STEPS = ["DRAFT", "CALCULATED", "APPROVED", "PAID", "LOCKED"];
@@ -24,9 +24,19 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     run.createdById ? prisma.user.findUnique({ where: { id: run.createdById } }) : null,
     run.approvedById ? prisma.user.findUnique({ where: { id: run.approvedById } }) : null,
   ]);
+  const prevSlips = await prisma.payslip.findMany({ where: { tenantId: ctx.tenantId, period: shiftPeriod(run.period, -1), run: { companyId: run.companyId } }, select: { employeeId: true, netPay: true, grossPay: true } });
+  const prevNet = new Map(prevSlips.map((p) => [p.employeeId, p.netPay]));
+  const variance = (employeeId: string, net: number) => {
+    const before = prevNet.get(employeeId);
+    if (before === undefined) return { label: "New", tone: "blue", flag: true };
+    if (!before) return { label: "—", tone: "gray", flag: false };
+    const pct = ((net - before) / before) * 100;
+    return { label: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`, tone: Math.abs(pct) > 10 ? (pct > 0 ? "orange" : "red") : "gray", flag: Math.abs(pct) > 10 };
+  };
+  const flagged = slips.filter((s) => variance(s.employeeId, s.netPay).flag).length;
   const stepIdx = STEPS.indexOf(run.status);
   const editable = ["DRAFT", "CALCULATED"].includes(run.status);
-  const canApprove = can(ctx.role, "payroll.approve");
+  const canApprove = can(ctx, "payroll.approve");
   const warnings = slips.filter((s) => s.warnings);
 
   const Step = ({ step, label, variant = "primary", confirm }: { step: string; label: string; variant?: "primary" | "lime" | "secondary" | "danger" | "grape"; confirm?: string }) => (
@@ -213,7 +223,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
       </Card>
 
       <Card>
-        <CardHeader title="Payslips" emoji="🧾" subtitle={`${slips.length} employees`} />
+        <CardHeader title="Payslips" emoji="🧾" subtitle={`${slips.length} employees · ${flagged} with a net-pay change over 10% or new this month. Review these before approving.`} />
         {slips.length === 0 ? (
           <p className="px-5 py-6 text-sm text-muted">Click Calculate to generate payslips.</p>
         ) : (
@@ -228,6 +238,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
                 <TH className="text-right">PCB</TH>
                 <TH className="text-right">Other</TH>
                 <TH className="text-right">Net</TH>
+                <TH className="text-right">vs {periodLabel(shiftPeriod(run.period, -1)).split(" ")[0]}</TH>
                 <TH />
               </tr>
             </THead>
@@ -245,6 +256,12 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
                   <TD className="text-right"><Money value={s.otherDeductions + s.zakat} /></TD>
                   <TD className="text-right font-bold"><Money value={s.netPay} /></TD>
                   <TD className="text-right">
+                    {(() => {
+                      const v = variance(s.employeeId, s.netPay);
+                      return <Badge tone={v.tone}>{v.label}</Badge>;
+                    })()}
+                  </TD>
+                  <TD className="text-right">
                     <Link href={`/payroll/${run.id}/payslip/${s.id}`} className="text-xs font-bold underline">View</Link>
                   </TD>
                 </TR>
@@ -258,6 +275,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
                 <TD className="text-right"><Money value={run.totalPcb} /></TD>
                 <TD className="text-right"><Money value={slips.reduce((s, p) => s + p.otherDeductions + p.zakat, 0)} /></TD>
                 <TD className="text-right"><Money value={run.totalNet} /></TD>
+                <TD />
                 <TD />
               </tr>
             </tbody>

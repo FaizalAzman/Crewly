@@ -14,6 +14,7 @@ import { launchCycle, setGoal, submitSelfReview, submitManagerReview } from "../
 import { openCase, issueShowCause, fileGrievance, upsertPermit, assignAsset } from "../src/server/services/relations.service";
 import { giveKudos, respondSurvey, openTicket, commentTicket } from "../src/server/services/culture.service";
 import type { Ctx } from "../src/server/types";
+import { ctxFromUser } from "../src/server/ctx";
 
 const D = (s: string) => parseDate(s)!;
 const PASSWORD = "demo1234";
@@ -164,7 +165,7 @@ async function main() {
   const grades = Object.fromEntries((await prisma.jobGrade.findMany({ where: { tenantId: T } })).map((g) => [g.code, g.id]));
 
   // System context (acts as HR admin during seeding)
-  const sys: Ctx = { tenantId: T, userId: "seed", userName: "Seeder", role: "OWNER", employeeId: null };
+  const sys: Ctx = ctxFromUser({ id: "seed", tenantId: T, name: "Seeder", role: "OWNER", employeeId: null });
   const ids: Record<string, string> = {};
   const passwordHash = await hashPassword(PASSWORD);
   const payItems = Object.fromEntries((await prisma.payItem.findMany({ where: { tenantId: T } })).map((p) => [p.code, p.id]));
@@ -244,8 +245,7 @@ async function main() {
   }
   const users = Object.fromEntries((await prisma.user.findMany({ where: { tenantId: T } })).map((u) => [u.employeeId!, u]));
   const ctxOf = (key: string): Ctx => {
-    const u = users[ids[key]];
-    return { tenantId: T, userId: u.id, userName: u.name, role: u.role as Ctx["role"], employeeId: ids[key] };
+    return ctxFromUser(users[ids[key]]);
   };
   const hr = ctxOf("aisyah");
   /** The employee's manager if they hold an approving role, otherwise HR. */
@@ -647,11 +647,36 @@ async function main() {
   // ── Documents ──
   const tplOffer = await prisma.letterTemplate.findFirst({ where: { tenantId: T, category: "CONFIRMATION" } });
   if (tplOffer) {
-    const { generateLetter } = await import("../src/server/services/culture.service");
-    await generateLetter(hr, tplOffer.id, ids.azlan);
+    const { generateLetter, issueLetter, acknowledgeLetter } = await import("../src/server/services/culture.service");
+    const conf = await generateLetter(hr, tplOffer.id, ids.azlan, { effectiveDate: "3 June 2025" });
+    await issueLetter(hr, conf.id);
+    await acknowledgeLetter(ctxOf("azlan"), conf.id);
+    const inc = await prisma.letterTemplate.findFirst({ where: { tenantId: T, category: "INCREMENT" } });
+    if (inc) {
+      const l = await generateLetter(hr, inc.id, ids.danial, { effectiveDate: "1 October 2026" });
+      await issueLetter(hr, l.id);
+    }
+    const warn = await prisma.letterTemplate.findFirst({ where: { tenantId: T, category: "WARNING" } });
+    if (warn) await generateLetter(hr, warn.id, ids.arif); // stays a draft for HR to complete
   }
   const policies = await prisma.policy.findMany({ where: { tenantId: T } });
   for (const p of PEOPLE.slice(0, 30)) for (const pol of policies.slice(0, 2)) await prisma.policyAcknowledgement.create({ data: { policyId: pol.id, employeeId: ids[p.key] } });
+
+  // ── Custom role: a recruiter who manages hiring but can't see pay ──
+  const { saveCustomRole } = await import("../src/server/services/roles.service");
+  const recruiter = await saveCustomRole(ctxOf("ceo"), {
+    name: "Recruiter",
+    description: "Runs hiring and onboarding; no access to pay",
+    permissions: ["employee.view", "recruitment.manage", "lifecycle.manage", "documents.manage"],
+    scope: "ALL",
+  });
+  await prisma.user.update({ where: { employeeId: ids.azlan }, data: { role: "CUSTOM", customRoleId: recruiter.id } });
+  await saveCustomRole(ctxOf("ceo"), {
+    name: "Branch Lead",
+    description: "Approves time off and claims for their own team",
+    permissions: ["employee.view", "leave.approve", "claims.approve", "overtime.approve", "attendance.manage", "performance.review"],
+    scope: "TEAM",
+  });
 
   // ── Billing ──
   for (let m = 1; m <= 9; m++) {

@@ -5,6 +5,8 @@ import { prisma } from "@/lib/db";
 import { Badge, Card, CardBody, CardHeader, Checkbox, Field, Input, Money, PageHeader, Progress, Select, StatCard, Table, Tabs, TD, TH, THead, TR } from "@/components/ui";
 import { FormModal } from "@/components/forms";
 import { act } from "@/server/action";
+import { enrolBenefit, recordBenefitUsage } from "@/server/services/money.service";
+import { ActionButton } from "@/components/forms";
 import { boolField, numField, rm, str, todayMY } from "@/lib/utils";
 import { humanize, stateName, STATES } from "@/lib/constants";
 import { DomainError, type ActionState } from "@/server/types";
@@ -39,9 +41,30 @@ async function clinicAction(_: ActionState, fd: FormData): Promise<ActionState> 
   });
 }
 
+async function enrolAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("benefits.manage");
+  return act(async () => {
+    await enrolBenefit(ctx, str(fd, "planId"), str(fd, "employeeId"), numField(fd, "dependants"));
+    revalidatePath("/benefits");
+    return "Enrolled";
+  });
+}
+
+async function usageAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("benefits.manage");
+  return act(async () => {
+    const en = await recordBenefitUsage(ctx, str(fd, "enrollmentId"), numField(fd, "amount"));
+    revalidatePath("/benefits");
+    return `Recorded. Utilised RM${en.utilised.toFixed(2)} so far`;
+  });
+}
+
 export default async function BenefitsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const ctx = await requireCtx("benefits.manage");
   const tab = (await searchParams).tab ?? "plans";
+  const emps = await prisma.employee.findMany({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] } }, orderBy: { fullName: "asc" } });
   const [plans, clinics] = await Promise.all([
     prisma.benefitPlan.findMany({ where: { tenantId: ctx.tenantId }, include: { enrollments: { include: { employee: true } } } }),
     prisma.panelClinic.findMany({ where: { tenantId: ctx.tenantId }, orderBy: [{ state: "asc" }, { name: "asc" }] }),
@@ -94,7 +117,24 @@ export default async function BenefitsPage({ searchParams }: { searchParams: Pro
             const cap = p.annualLimit * p.enrollments.length;
             return (
               <Card key={p.id}>
-                <CardHeader title={p.name} emoji={p.emoji} subtitle={`${p.provider} · ${humanize(p.type)}${p.coversDependants ? " · incl. dependants" : ""}`} action={<Badge tone="gray">{p.enrollments.length} enrolled</Badge>} />
+                <CardHeader
+                  title={p.name}
+                  emoji={p.emoji}
+                  subtitle={`${p.provider} · ${humanize(p.type)}${p.coversDependants ? " · incl. dependants" : ""} · ${p.enrollments.length} enrolled`}
+                  action={
+                    <div className="flex gap-1">
+                      <FormModal trigger="Enrol" triggerSize="sm" triggerVariant="secondary" title={`Enrol in ${p.name}`} action={enrolAction}>
+                        <input type="hidden" name="planId" value={p.id} />
+                        <Field label="Employee"><Select name="employeeId" options={emps.filter((e) => !p.enrollments.some((x) => x.employeeId === e.id)).map((e) => ({ value: e.id, label: e.fullName }))} /></Field>
+                        {p.coversDependants && <Field label="Dependants"><Input type="number" name="dependants" defaultValue="0" min={0} /></Field>}
+                      </FormModal>
+                      <FormModal trigger="Record usage" triggerSize="sm" title={`Record usage · ${p.name}`} subtitle={`Per-person annual limit ${rm(p.annualLimit, { decimals: 0 })}`} action={usageAction}>
+                        <Field label="Employee"><Select name="enrollmentId" options={p.enrollments.map((e) => ({ value: e.id, label: `${e.employee.fullName} · used ${rm(e.utilised, { decimals: 0 })}` }))} /></Field>
+                        <Field label="Amount (RM)"><Input type="number" step="0.01" name="amount" required /></Field>
+                      </FormModal>
+                    </div>
+                  }
+                />
                 <CardBody className="space-y-3">
                   <div className="grid grid-cols-3 gap-3 text-sm">
                     <div><p className="text-[11px] font-bold uppercase text-muted">Limit / person</p><p className="font-mono font-bold">{rm(p.annualLimit, { decimals: 0 })}</p></div>

@@ -20,7 +20,7 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
   const today = todayMY();
   const year = today.getUTCFullYear();
 
-  const [emp, att, balances, lastSlip, anns, tasks, policies, reviews, goals, colleagues, kudos, openSep] = await Promise.all([
+  const [emp, att, balances, lastSlip, anns, tasks, policies, reviews, goals, colleagues, kudos, openSep, letters, results] = await Promise.all([
     prisma.employee.findUniqueOrThrow({ where: { id }, include: { manager: true, department: true, branch: true } }),
     prisma.attendanceRecord.findUnique({ where: { employeeId_date: { employeeId: id, date: today } } }),
     prisma.leaveBalance.findMany({ where: { employeeId: id, year }, include: { leaveType: true } }),
@@ -33,6 +33,8 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
     prisma.employee.findMany({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] }, id: { not: id } }, orderBy: { fullName: "asc" }, select: { id: true, fullName: true } }),
     prisma.kudos.findMany({ where: { toId: id }, include: { from: true }, orderBy: { createdAt: "desc" }, take: 3 }),
     prisma.separation.findFirst({ where: { employeeId: id, status: { in: ["PENDING", "APPROVED"] } } }),
+    prisma.generatedLetter.findMany({ where: { employeeId: id, status: "ISSUED" } }),
+    prisma.performanceReview.findMany({ where: { employeeId: id, status: { in: ["CALIBRATION", "COMPLETED"] } }, include: { cycle: true }, orderBy: { updatedAt: "desc" }, take: 2 }),
   ]);
 
   const shown = balances.filter((b) => ["AL", "SL", "RL"].includes(b.leaveType.code) || b.taken > 0);
@@ -122,7 +124,7 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
             )}
           </div>
 
-          {(reviews.length > 0 || policies.length > 0 || tasks.some((t) => !t.done)) && (
+          {(reviews.length > 0 || policies.length > 0 || letters.length > 0 || tasks.some((t) => !t.done)) && (
             <Card tone="bg-sunny">
               <CardHeader title="Your to-dos" emoji="📝" />
               <CardBody className="space-y-3">
@@ -138,6 +140,12 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
                         <Textarea name="comment" rows={5} required />
                       </Field>
                     </FormModal>
+                  </div>
+                ))}
+                {letters.map((l) => (
+                  <div key={l.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-ink bg-card px-3 py-2">
+                    <span className="text-sm font-semibold">✉️ New letter from HR: {l.title.split(" — ")[0]}</span>
+                    <Link href={`/documents/letters/${l.id}`} className="rounded-lg border-2 border-ink bg-ink px-2 py-1 text-xs font-bold text-paper">Read & acknowledge</Link>
                   </div>
                 ))}
                 {policies.map((p) => (
@@ -191,6 +199,16 @@ export default async function MePage({ searchParams }: { searchParams: Promise<{
             </Card>
             <Card>
               <CardHeader title="Announcements" emoji="📣" />
+              {results.length > 0 && (
+                <div className="border-b-2 border-dashed border-soft-line px-5 py-3">
+                  {results.map((r) => (
+                    <p key={r.id} className="text-sm">
+                      🎯 <b>{r.cycle.name}</b>: {r.status === "COMPLETED" ? <>final rating <b>{r.finalRating}</b>/5</> : "your manager has reviewed you, and calibration is in progress"}
+                      {r.managerComment && <span className="block text-xs text-muted">&ldquo;{r.managerComment}&rdquo;</span>}
+                    </p>
+                  ))}
+                </div>
+              )}
               <CardBody className="space-y-3">
                 {anns.map((a) => (
                   <div key={a.id}>

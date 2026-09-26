@@ -50,9 +50,10 @@ export default async function HolidaysPage({ searchParams }: { searchParams: Pro
   const state = sp.state ?? me?.branch?.state ?? company?.state ?? "SELANGOR";
   const year = Number(sp.year ?? todayMY().getUTCFullYear());
   const all = await prisma.publicHoliday.findMany({ where: { year, OR: [{ tenantId: null }, { tenantId: ctx.tenantId }] }, orderBy: { date: "asc" } });
+  const years = (await prisma.publicHoliday.findMany({ where: { OR: [{ tenantId: null }, { tenantId: ctx.tenantId }] }, distinct: ["year"], select: { year: true }, orderBy: { year: "asc" } })).map((y) => String(y.year));
   const rows = all.filter((h) => h.kind === "COMPANY" || holidayAppliesToState(h.states, state));
   const today = todayMY();
-  const manage = can(ctx.role, "leave.manage");
+  const manage = can(ctx, "leave.manage");
 
   return (
     <>
@@ -84,7 +85,7 @@ export default async function HolidaysPage({ searchParams }: { searchParams: Pro
           <Select name="state" defaultValue={state} options={STATES.map((s) => ({ value: s.code, label: s.name }))} className="w-60" />
         </Field>
         <Field label="Year">
-          <Select name="year" defaultValue={String(year)} options={["2025", "2026"]} className="w-28" />
+          <Select name="year" defaultValue={String(year)} options={years.length ? years : [String(year)]} className="w-28" />
         </Field>
         <button className={btnClass("primary")}>Show</button>
       </form>

@@ -6,6 +6,7 @@ import { toCsv, fmtDate } from "@/lib/utils";
 import { bankFile, cp39File, epfFile, socsoEisFile } from "@/lib/payroll/statutory-files";
 import { slipRows, cp8d } from "@/server/services/tax.service";
 import { audit } from "@/server/guard";
+import { IMPORT_COLUMNS } from "@/server/services/import.service";
 
 function csv(body: string, filename: string) {
   return new NextResponse(body, {
@@ -19,8 +20,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ type
   const { type } = await params;
   const sp = req.nextUrl.searchParams;
 
+  if (type === "employee-template") {
+    if (!can(ctx, "employee.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return csv(
+      toCsv([
+        [...IMPORT_COLUMNS],
+        ["Aina binti Yusof", "aina@company.my", "950607-10-5432", "", "CITIZEN", "FEMALE", "MALAY", "ISLAM", "SINGLE", "", "Marketing Executive", "MKT", "", "", "PERMANENT", "2026-10-01", "3", "", "4200", "+60 12-345 6789", "Maybank", "112233445566", "", "", ""],
+      ]),
+      "employee-import-template.csv",
+    );
+  }
+
   if (type === "employees") {
-    if (!can(ctx.role, "employee.sensitive")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!can(ctx, "employee.sensitive")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const rows = await prisma.employee.findMany({
       where: { tenantId: ctx.tenantId, ...(sp.get("status") && sp.get("status") !== "ALL" && sp.get("status") !== "CURRENT" ? { status: sp.get("status")! } : {}) },
       include: { department: true, company: true, branch: true, manager: true },
@@ -41,7 +53,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ type
   }
 
   if (["epf", "socso", "cp39", "bank"].includes(type)) {
-    if (!can(ctx.role, "payroll.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!can(ctx, "payroll.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const run = await prisma.payrollRun.findFirst({ where: { id: sp.get("runId") ?? "", tenantId: ctx.tenantId }, include: { company: true } });
     if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     const rows = await slipRows(ctx, run.id);
@@ -54,7 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ type
   }
 
   if (type === "cp8d") {
-    if (!can(ctx.role, "tax.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!can(ctx, "tax.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const year = Number(sp.get("year") ?? new Date().getFullYear());
     const companyId = sp.get("companyId") ?? "";
     const rows = await cp8d(ctx, companyId, year);

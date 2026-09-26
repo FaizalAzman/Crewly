@@ -1,11 +1,17 @@
 import type { Role } from "@/lib/constants";
+import type { Permission, Scope } from "@/lib/permissions";
 
 /** Everything a service needs to know about who is acting. Independent of Next.js so services are testable. */
 export interface Ctx {
   tenantId: string;
   userId: string;
   userName: string;
-  role: Role;
+  /** Built-in role, or "CUSTOM" for a tenant-defined role. */
+  role: Role | "CUSTOM";
+  /** Display name of the role (custom role name for CUSTOM). */
+  roleLabel: string;
+  permissions: Permission[];
+  scope: Scope;
   employeeId: string | null;
 }
 

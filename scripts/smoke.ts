@@ -18,9 +18,13 @@ async function main() {
   const job = await prisma.jobOpening.findFirst({ where: { tenantId: user.tenantId } });
   const ticket = await prisma.ticket.findFirst({ where: { tenantId: user.tenantId } });
   const cycle = await prisma.reviewCycle.findFirst({ where: { tenantId: user.tenantId } });
+  const tenantSlug = (await prisma.tenant.findUniqueOrThrow({ where: { id: user.tenantId } })).slug;
+  const letter = await prisma.generatedLetter.findFirst({ where: { tenantId: user.tenantId } });
 
   const routes = (process.env.ROUTES?.split(",") ?? [
-    "/dashboard", "/me", "/me/leave", "/me/claims", "/me/payslips", "/me/tax", "/approvals",
+    "/dashboard", "/me", "/me/profile", "/me/leave", "/me/time", "/me/claims", "/me/payslips", "/me/tax", "/me/documents", "/approvals", "/directory",
+    "/employees/import", "/onboarding?tab=templates", "/settings?tab=roles", "/documents?tab=letters&status=DRAFT", `/careers/${tenantSlug}`, `/careers/${tenantSlug}/${job?.id}`,
+    "/api/export/employee-template",
     "/employees", "/employees/new", `/employees/${emp?.id}`, `/employees/${emp?.id}/edit`,
     ...["job", "pay", "family", "documents", "leave", "payslips", "history", "assets"].map((t) => `/employees/${emp?.id}?tab=${t}`),
     "/org", "/org?tab=branches", "/org?tab=departments", "/org?tab=positions", "/org?tab=grades", "/org?tab=chart",
@@ -33,7 +37,7 @@ async function main() {
     "/disciplinary", "/grievances", "/foreign-workers", "/documents", "/assets",
     "/engagement", "/engagement?tab=kudos", "/engagement?tab=surveys", "/helpdesk", `/helpdesk/${ticket?.id}`,
     "/reports", "/settings", "/settings?tab=users", "/settings?tab=audit", "/settings?tab=billing",
-    `/api/export/employees`, `/api/export/epf?runId=${run?.id}`,
+    `/api/export/employees`, `/api/export/epf?runId=${run?.id}`, `/documents/letters/${letter?.id}`,
   ]).filter((r) => !r.includes("undefined"));
 
   let failures = 0;

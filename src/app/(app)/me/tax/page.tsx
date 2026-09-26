@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { ActionForm, SubmitButton } from "@/components/forms";
 import { Callout, Card, CardBody, CardHeader, Field, Input, PageHeader } from "@/components/ui";
 import { EaFormView } from "@/components/ea-form-view";
-import { PrintButton } from "@/components/print-button";
+import { PdfButton } from "@/components/pdf-button";
 import { eaForm } from "@/server/services/tax.service";
 import { tp1Total } from "@/server/services/payroll.service";
 import { rm, todayMY } from "@/lib/utils";
@@ -23,7 +23,7 @@ export default async function MyTaxPage() {
   const v = (k: string) => (decl ? (decl as unknown as Record<string, number>)[k] : 0);
   return (
     <>
-      <PageHeader title="Tax & reliefs" emoji="🧮" subtitle="Declare reliefs (TP1) and previous-employer income (TP3) so your monthly PCB is accurate." actions={<PrintButton label="Print EA" />} />
+      <PageHeader title="Tax & reliefs" emoji="🧮" subtitle="Declare reliefs (TP1) and previous-employer income (TP3) so your monthly PCB is accurate." actions={<PdfButton href={`/api/pdf/ea/${ctx.employeeId}?year=${year}`} label="Download Form EA" />} />
       <div className="grid gap-6 xl:grid-cols-2">
         <div className="no-print space-y-6">
           <ActionForm action={saveTaxDeclarationAction} resetOnSuccess={false} className="space-y-6">

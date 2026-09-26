@@ -10,9 +10,10 @@ import { createSeparationAction, separationStepAction } from "./actions";
 
 export const metadata: Metadata = { title: "Offboarding" };
 
-export default async function OffboardingPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+export default async function OffboardingPage({ searchParams }: { searchParams: Promise<{ tab?: string; employee?: string }> }) {
   const ctx = await requireCtx("lifecycle.manage");
-  const tab = (await searchParams).tab ?? "separations";
+  const sp = await searchParams;
+  const tab = sp.tab ?? "separations";
   const [seps, emps] = await Promise.all([
     prisma.separation.findMany({ where: { tenantId: ctx.tenantId }, include: { employee: { include: { assets: { where: { status: "ASSIGNED" } } } } }, orderBy: { createdAt: "desc" } }),
     prisma.employee.findMany({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION"] } }, orderBy: { fullName: "asc" } }),
@@ -28,7 +29,7 @@ export default async function OffboardingPage({ searchParams }: { searchParams: 
           <FormModal trigger="+ Record separation" title="Record a separation" subtitle="Notice, termination benefit and leave encashment are calculated automatically." action={createSeparationAction} wide>
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="Employee" className="md:col-span-2">
-                <Select name="employeeId" options={emps.map((e) => ({ value: e.id, label: `${e.fullName} · ${e.jobTitle}` }))} />
+                <Select name="employeeId" defaultValue={sp.employee} options={emps.map((e) => ({ value: e.id, label: `${e.fullName} · ${e.jobTitle}` }))} />
               </Field>
               <Field label="Type">
                 <Select name="type" options={["RESIGNATION", "TERMINATION", "RETRENCHMENT", "RETIREMENT", "END_OF_CONTRACT", "MUTUAL", "DEATH"]} />
@@ -110,6 +111,12 @@ export default async function OffboardingPage({ searchParams }: { searchParams: 
                     <div className="flex flex-wrap gap-1">
                       {s.status === "PENDING" && <ActionButton action={separationStepAction} fields={{ id: s.id, step: "approve" }} variant="lime">Approve</ActionButton>}
                       {s.status === "APPROVED" && !s.cp22aSubmitted && <ActionButton action={separationStepAction} fields={{ id: s.id, step: "cp22a" }}>CP22A sent</ActionButton>}
+                      {["APPROVED", "COMPLETED"].includes(s.status) && !s.settlementPeriod && (s.leaveEncashAmount > 0 || s.terminationBenefit > 0 || s.noticePayInLieu !== 0) && (
+                        <ActionButton action={separationStepAction} fields={{ id: s.id, step: "settle" }} variant="grape" confirm="Post leave encashment, termination benefit and notice pay/indemnity to the final month's payroll, and recover outstanding loans?">
+                          Post to payroll
+                        </ActionButton>
+                      )}
+                      {s.settlementPeriod && <Badge tone="green">💸 Settled in {s.settlementPeriod}</Badge>}
                       {s.status === "APPROVED" && (
                         <FormModal trigger="Complete" triggerSize="sm" title={`Complete separation · ${s.employee.fullName}`} action={separationStepAction}>
                           <input type="hidden" name="id" value={s.id} />

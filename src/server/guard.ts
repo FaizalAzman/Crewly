@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { ForbiddenError, type Ctx } from "./types";
 
 export function assertCan(ctx: Ctx, permission: Permission) {
-  if (!can(ctx.role, permission)) throw new ForbiddenError();
+  if (!can(ctx, permission)) throw new ForbiddenError();
 }
 
 /** A manager may act on their direct (and indirect) reports; HR-level roles on anyone in the tenant. */
@@ -18,12 +18,24 @@ export async function isInManagerChain(managerEmployeeId: string, employeeId: st
   return false;
 }
 
+/**
+ * Approval rule: never your own request; you need the permission; company-wide scope may approve anyone,
+ * team scope only people in your reporting line.
+ */
 export async function assertCanApproveFor(ctx: Ctx, employeeId: string, permission: Permission) {
   if (ctx.employeeId && ctx.employeeId === employeeId) throw new ForbiddenError("You can't approve your own request.");
-  if (ctx.role === "OWNER" || ctx.role === "HR_ADMIN") return;
-  if (ctx.role === "PAYROLL" && can(ctx.role, permission)) return;
-  if (ctx.role === "MANAGER" && can(ctx.role, permission) && ctx.employeeId && (await isInManagerChain(ctx.employeeId, employeeId))) return;
+  if (!can(ctx, permission)) throw new ForbiddenError("Only the employee's manager or HR can approve this.");
+  if (ctx.scope === "ALL") return;
+  if (ctx.employeeId && (await isInManagerChain(ctx.employeeId, employeeId))) return;
   throw new ForbiddenError("Only the employee's manager or HR can approve this.");
+}
+
+/** Whether the actor may see this employee's profile at all (scope check). */
+export async function canSeeEmployee(ctx: Ctx, employeeId: string) {
+  if (ctx.employeeId === employeeId) return true;
+  if (ctx.scope === "ALL") return true;
+  if (ctx.scope === "TEAM" && ctx.employeeId) return isInManagerChain(ctx.employeeId, employeeId);
+  return false;
 }
 
 export async function audit(ctx: Ctx, action: string, entity: string, entityId: string | null, summary: string) {

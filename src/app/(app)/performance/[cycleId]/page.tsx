@@ -15,11 +15,11 @@ export default async function CyclePage({ params }: { params: Promise<{ cycleId:
   const cycle = await prisma.reviewCycle.findFirst({ where: { id: cycleId, tenantId: ctx.tenantId } });
   if (!cycle) notFound();
   const reviews = await prisma.performanceReview.findMany({
-    where: { cycleId, ...(ctx.role === "MANAGER" ? { reviewerId: ctx.userId } : {}) },
+    where: { cycleId, ...(ctx.scope !== "ALL" ? { reviewerId: ctx.userId } : {}) },
     include: { employee: { include: { department: true, goals: { where: { cycleId } } } } },
     orderBy: { employee: { fullName: "asc" } },
   });
-  const manage = can(ctx.role, "performance.manage");
+  const manage = can(ctx, "performance.manage");
   const dist = [1, 2, 3, 4, 5].map((r) => ({ name: `${r}`, value: reviews.filter((x) => x.finalRating != null && Math.round(x.finalRating) === r).length, highlight: r === 1 || r === 5 }));
   const ratingOpts = [1, 2, 3, 4, 5].map((v) => ({ value: String(v), label: `${v} · ${RATING_LABELS[v]}` }));
 

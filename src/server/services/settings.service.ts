@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
-import { ROLES } from "@/lib/constants";
 import { assertCan, audit } from "../guard";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
+import { assertNoEscalation, resolveRoleKey } from "./roles.service";
+import { hashPassword, verifyPassword } from "./auth.service";
 
 export interface WorkspaceSettings {
   name: string;
@@ -36,19 +37,61 @@ export async function updateWorkspace(ctx: Ctx, s: WorkspaceSettings) {
   await audit(ctx, "UPDATE", "Tenant", ctx.tenantId, "Updated workspace settings");
 }
 
-export async function changeUserRole(ctx: Ctx, userId: string, role: string) {
+/** roleKey: a built-in role ("MANAGER") or a custom role ("CUSTOM:<id>"). */
+export async function changeUserRole(ctx: Ctx, userId: string, roleKey: string) {
   assertCan(ctx, "settings.manage");
-  if (!(ROLES as readonly string[]).includes(role)) throw new DomainError("Unknown role.");
+  const target = await resolveRoleKey(ctx, roleKey);
   const user = await prisma.user.findFirst({ where: { id: userId, tenantId: ctx.tenantId } });
   if (!user) throw new DomainError("User not found.");
   if (user.id === ctx.userId) throw new DomainError("You can't change your own role.");
-  if ((role === "OWNER" || user.role === "OWNER") && ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can grant or remove the owner role.");
-  if (user.role === "OWNER" && role !== "OWNER") {
+  if ((target.role === "OWNER" || user.role === "OWNER") && ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can grant or remove the owner role.");
+  assertNoEscalation(ctx, target.permissions);
+  if (user.role === "OWNER" && target.role !== "OWNER") {
     const owners = await prisma.user.count({ where: { tenantId: ctx.tenantId, role: "OWNER", active: true } });
     if (owners <= 1) throw new DomainError("A workspace needs at least one owner.");
   }
-  await prisma.user.update({ where: { id: userId }, data: { role } });
-  await audit(ctx, "UPDATE", "User", userId, `Changed ${user.name}'s role ${user.role} → ${role}`);
+  await prisma.user.update({ where: { id: userId }, data: { role: target.role, customRoleId: target.customRoleId } });
+  await audit(ctx, "UPDATE", "User", userId, `Changed ${user.name}'s role to ${target.label}`);
+}
+
+/** Invite a user who isn't an employee (e.g. external accountant, auditor, consultant). */
+export async function inviteUser(ctx: Ctx, input: { name: string; email: string; roleKey: string; password: string }) {
+  assertCan(ctx, "settings.manage");
+  const target = await resolveRoleKey(ctx, input.roleKey);
+  if (target.role === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can invite another owner.");
+  assertNoEscalation(ctx, target.permissions);
+  const email = input.email.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DomainError("That email looks off.");
+  if (input.name.trim().length < 2) throw new DomainError("Name is required.");
+  if (input.password.length < 8) throw new DomainError("Temporary password must be at least 8 characters.");
+  if (await prisma.user.findUnique({ where: { email } })) throw new DomainError("A user with this email already exists.");
+  const employee = await prisma.employee.findFirst({ where: { tenantId: ctx.tenantId, email, user: null } });
+  const user = await prisma.user.create({
+    data: { tenantId: ctx.tenantId, email, name: input.name.trim(), role: target.role, customRoleId: target.customRoleId, employeeId: employee?.id ?? null, passwordHash: await hashPassword(input.password) },
+  });
+  await audit(ctx, "CREATE", "User", user.id, `Invited ${user.name} as ${target.label}`);
+  return user;
+}
+
+/** Admin password reset. */
+export async function resetUserPassword(ctx: Ctx, userId: string, password: string) {
+  assertCan(ctx, "settings.manage");
+  const user = await prisma.user.findFirst({ where: { id: userId, tenantId: ctx.tenantId } });
+  if (!user) throw new DomainError("User not found.");
+  if (user.role === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError("Only an owner can reset an owner's password.");
+  if (password.length < 8) throw new DomainError("Password must be at least 8 characters.");
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(password) } });
+  await audit(ctx, "UPDATE", "User", userId, `Reset password for ${user.name}`);
+}
+
+/** Self-service password change. */
+export async function changeOwnPassword(ctx: Ctx, current: string, next: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: ctx.userId } });
+  if (!(await verifyPassword(current, user.passwordHash))) throw new DomainError("Your current password is incorrect.");
+  if (next.length < 8) throw new DomainError("New password must be at least 8 characters.");
+  if (next === current) throw new DomainError("Choose a different password.");
+  await prisma.user.update({ where: { id: ctx.userId }, data: { passwordHash: await hashPassword(next) } });
+  await audit(ctx, "UPDATE", "User", ctx.userId, "Changed own password");
 }
 
 export async function setUserActive(ctx: Ctx, userId: string, active: boolean) {

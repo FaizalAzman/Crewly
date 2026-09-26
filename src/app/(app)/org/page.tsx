@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { Avatar, Badge, Card, CardBody, CardHeader, Checkbox, Field, Input, KV, Money, PageHeader, Select, StatCard, Table, Tabs, TD, TH, THead, TR } from "@/components/ui";
-import { FormModal } from "@/components/forms";
+import { ActionButton, FormModal } from "@/components/forms";
 import { STATES, stateName } from "@/lib/constants";
-import { saveBranchAction, saveCompanyAction, saveDepartmentAction, saveGradeAction, savePositionAction } from "./actions";
+import { defaultCompanyAction, deleteOrgAction, saveBranchAction, saveCompanyAction, saveDepartmentAction, saveGradeAction, savePositionAction } from "./actions";
 
 export const metadata: Metadata = { title: "Organization" };
 
@@ -71,7 +71,10 @@ export default async function OrgPage({ searchParams }: { searchParams: Promise<
                     <KV label="Headcount" value={`${c._count.employees} people · ${c._count.branches} branches`} />
                   </dl>
                   <p className="mt-3 text-xs text-muted">{c.address}</p>
-                  {c.isDefault && <Badge tone="lime" className="mt-2">Default entity</Badge>}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {c.isDefault ? <Badge tone="lime">Default entity</Badge> : <ActionButton action={defaultCompanyAction} fields={{ id: c.id }}>Make default</ActionButton>}
+                    {!c.isDefault && <ActionButton action={deleteOrgAction} fields={{ kind: "company", id: c.id }} variant="ghost" confirm={`Delete ${c.name}?`}>Delete</ActionButton>}
+                  </div>
                 </CardBody>
               </Card>
             ))}
@@ -113,11 +116,12 @@ export default async function OrgPage({ searchParams }: { searchParams: Promise<
                   <TD>{stateName(b.state)}</TD>
                   <TD className="text-xs">{b.latitude != null ? `${b.geofenceMeters}m · ${b.latitude.toFixed(4)}, ${b.longitude?.toFixed(4)}` : <Badge tone="gray">Off</Badge>}</TD>
                   <TD>{b._count.employees}</TD>
-                  <TD className="text-right">
+                  <TD className="text-right"><div className="flex justify-end gap-1">
                     <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${b.name}`} action={saveBranchAction}>
                       <input type="hidden" name="id" value={b.id} />
                       <BranchFields b={b} companies={companies} stateOpts={stateOpts} />
                     </FormModal>
+                    <ActionButton action={deleteOrgAction} fields={{ kind: "branch", id: b.id }} variant="ghost" confirm="Delete this branch?">Delete</ActionButton></div>
                   </TD>
                 </TR>
               ))}
@@ -167,11 +171,12 @@ export default async function OrgPage({ searchParams }: { searchParams: Promise<
                       {d._count.employees}
                     </Link>
                   </TD>
-                  <TD className="text-right">
+                  <TD className="text-right"><div className="flex justify-end gap-1">
                     <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${d.name}`} action={saveDepartmentAction}>
                       <input type="hidden" name="id" value={d.id} />
                       <DeptFields d={d} depts={depts} empOpts={empOpts} />
                     </FormModal>
+                    <ActionButton action={deleteOrgAction} fields={{ kind: "department", id: d.id }} variant="ghost" confirm="Delete this department?">Delete</ActionButton></div>
                   </TD>
                 </TR>
               ))}
@@ -213,11 +218,12 @@ export default async function OrgPage({ searchParams }: { searchParams: Promise<
                       {p._count.employees} / {p.headcount}
                     </Badge>
                   </TD>
-                  <TD className="text-right">
+                  <TD className="text-right"><div className="flex justify-end gap-1">
                     <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${p.title}`} action={savePositionAction}>
                       <input type="hidden" name="id" value={p.id} />
                       <PositionFields p={p} depts={depts} grades={grades} />
                     </FormModal>
+                    <ActionButton action={deleteOrgAction} fields={{ kind: "position", id: p.id }} variant="ghost" confirm="Delete this position?">Delete</ActionButton></div>
                   </TD>
                 </TR>
               ))}
@@ -263,11 +269,12 @@ export default async function OrgPage({ searchParams }: { searchParams: Promise<
                     <TD className="text-right"><Money value={g.maxSalary} /></TD>
                     <TD>{g._count.employees}</TD>
                     <TD>{cr ? <Badge tone={cr > 1.1 ? "orange" : cr < 0.9 ? "blue" : "green"}>{cr.toFixed(2)}</Badge> : "-"}</TD>
-                    <TD className="text-right">
+                    <TD className="text-right"><div className="flex justify-end gap-1">
                       <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${g.code}`} action={saveGradeAction}>
                         <input type="hidden" name="id" value={g.id} />
                         <GradeFields g={g} />
                       </FormModal>
+                    <ActionButton action={deleteOrgAction} fields={{ kind: "grade", id: g.id }} variant="ghost" confirm="Delete this grade?">Delete</ActionButton></div>
                     </TD>
                   </TR>
                 );

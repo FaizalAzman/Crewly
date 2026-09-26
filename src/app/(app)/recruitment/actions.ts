@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
-import { addCandidate, createJob, hireCandidate, moveCandidate, scheduleInterview, scoreInterview, type Stage } from "@/server/services/talent.service";
+import { addCandidate, createJob, hireCandidate, moveCandidate, scheduleInterview, scoreInterview, updateCandidateNotes, updateJob, type Stage } from "@/server/services/talent.service";
+import { fileOrText } from "@/server/services/upload.service";
 import { prisma } from "@/lib/db";
 import type { ActionState } from "@/server/types";
 import { dateField, numField, optStr, str } from "@/lib/utils";
@@ -49,6 +50,10 @@ export async function addCandidateAction(_: ActionState, fd: FormData): Promise<
       currentCompany: optStr(fd, "currentCompany") ?? undefined,
       noticePeriod: optStr(fd, "noticePeriod") ?? undefined,
       notes: optStr(fd, "notes") ?? undefined,
+    }).then(async (c) => {
+      const resume = await fileOrText(ctx, fd, "resumeFile", "resumeUrl", "RESUME");
+      if (resume) await updateCandidateNotes(ctx, c.id, { resumeUrl: resume });
+      return c;
     });
     return "Candidate added";
   }, [`/recruitment/${jobId}`, "/recruitment"]);
@@ -103,4 +108,39 @@ export async function hireAction(_: ActionState, fd: FormData): Promise<ActionSt
   }, ["/recruitment", "/employees", "/onboarding"]);
   if (res?.ok) redirect(`/employees/${id}`);
   return res;
+}
+
+function jobInput(fd: FormData) {
+  return {
+    title: str(fd, "title"),
+    departmentId: optStr(fd, "departmentId"),
+    location: str(fd, "location") || "Kuala Lumpur",
+    employmentType: str(fd, "employmentType") || "PERMANENT",
+    workMode: str(fd, "workMode") || "HYBRID",
+    salaryMin: str(fd, "salaryMin") ? numField(fd, "salaryMin") : null,
+    salaryMax: str(fd, "salaryMax") ? numField(fd, "salaryMax") : null,
+    headcount: numField(fd, "headcount", 1),
+    description: optStr(fd, "description") ?? undefined,
+    closingDate: dateField(fd, "closingDate"),
+  };
+}
+
+export async function updateJobAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("recruitment.manage");
+  return act(async () => {
+    await updateJob(ctx, str(fd, "id"), jobInput(fd));
+    return "Job updated";
+  }, ["/recruitment", `/recruitment/${str(fd, "id")}`]);
+}
+
+export async function candidateNotesAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("recruitment.manage");
+  return act(async () => {
+    await updateCandidateNotes(ctx, str(fd, "id"), {
+      notes: optStr(fd, "notes"),
+      expectedSalary: str(fd, "expectedSalary") ? numField(fd, "expectedSalary") : null,
+      resumeUrl: await fileOrText(ctx, fd, "resumeFile", "resumeUrl", "RESUME"),
+    });
+    return "Candidate updated";
+  }, [`/recruitment/${str(fd, "jobId")}`]);
 }

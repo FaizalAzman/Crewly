@@ -1,82 +1,39 @@
 import type { Metadata } from "next";
-import { revalidatePath } from "next/cache";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/permissions";
 import { Badge, Callout, Card, CardBody, CardHeader, Field, Input, Money, PageHeader, PersonCell, Select, StatusBadge, Table, Tabs, TD, TH, THead, TR } from "@/components/ui";
 import { ActionButton, ActionForm, FormModal, SubmitButton } from "@/components/forms";
-import { act } from "@/server/action";
-import { changePlan, changeUserRole, quote, setUserActive, updateWorkspace, PLAN_PRICES } from "@/server/services/settings.service";
-import { fmtDate, fmtTime, numField, rm, str } from "@/lib/utils";
+import { redirect } from "next/navigation";
+import { quote, PLAN_PRICES } from "@/server/services/settings.service";
+import { assignableRoles } from "@/server/services/roles.service";
+import { fmtDate, fmtTime, rm } from "@/lib/utils";
 import { ROLE_LABEL, ROLES } from "@/lib/constants";
-import { ROLE_PERMISSIONS } from "@/lib/permissions";
-import type { ActionState } from "@/server/types";
+import { PERMISSION_CATALOG, ROLE_PERMISSIONS, ROLE_SCOPE, permissionLabel } from "@/lib/permissions";
+import { activeAction, deleteRoleAction, inviteAction, planAction, resetPasswordAction, roleAction, saveRoleAction, workspaceAction } from "./actions";
 
 export const metadata: Metadata = { title: "Settings" };
-
-async function workspaceAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  "use server";
-  const ctx = await requireCtx("settings.manage");
-  return act(async () => {
-    await updateWorkspace(ctx, {
-      name: str(fd, "name"),
-      workDaysPerWeek: numField(fd, "workDaysPerWeek", 5),
-      restDay: numField(fd, "restDay"),
-      offDay: str(fd, "offDay") === "" ? null : numField(fd, "offDay"),
-      payrollCutoff: numField(fd, "payrollCutoff", 25),
-      payDay: numField(fd, "payDay", 28),
-      unpaidLeaveBasis: str(fd, "unpaidLeaveBasis"),
-      mileageRate: numField(fd, "mileageRate", 0.6),
-      lateGraceMinutes: numField(fd, "lateGraceMinutes", 10),
-    });
-    revalidatePath("/", "layout");
-    return "Settings saved";
-  });
-}
-
-async function roleAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  "use server";
-  const ctx = await requireCtx("settings.manage");
-  return act(async () => {
-    await changeUserRole(ctx, str(fd, "userId"), str(fd, "role"));
-    revalidatePath("/settings");
-    return "Role updated";
-  });
-}
-
-async function activeAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  "use server";
-  const ctx = await requireCtx("settings.manage");
-  return act(async () => {
-    await setUserActive(ctx, str(fd, "userId"), str(fd, "active") === "true");
-    revalidatePath("/settings");
-    return "User updated";
-  });
-}
-
-async function planAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  "use server";
-  const ctx = await requireCtx("billing.manage");
-  return act(async () => {
-    await changePlan(ctx, str(fd, "plan"), str(fd, "cycle") as "MONTHLY");
-    revalidatePath("/", "layout");
-    return "Plan updated";
-  });
-}
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d, i) => ({ value: String(i), label: d }));
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
-  const ctx = await requireCtx("settings.manage");
-  const tab = (await searchParams).tab ?? "workspace";
-  const [tenant, users, logs, invoices, headcount] = await Promise.all([
+  const ctx = await requireCtx();
+  const manage = can(ctx, "settings.manage");
+  const auditor = can(ctx, "audit.view");
+  const billing = can(ctx, "billing.manage");
+  if (!manage && !auditor && !billing) redirect("/me?denied=1");
+  const requested = (await searchParams).tab ?? (manage ? "workspace" : auditor ? "audit" : "billing");
+  const allowed: Record<string, boolean> = { workspace: manage, users: manage, roles: manage, audit: auditor, privacy: manage, billing };
+  const tab = allowed[requested] ? requested : manage ? "workspace" : auditor ? "audit" : "billing";
+  const [tenant, users, logs, invoices, headcount, customRoles, roleOptions] = await Promise.all([
     prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } }),
-    prisma.user.findMany({ where: { tenantId: ctx.tenantId }, include: { employee: true }, orderBy: [{ role: "asc" }, { name: "asc" }] }),
+    prisma.user.findMany({ where: { tenantId: ctx.tenantId }, include: { employee: true, customRole: true }, orderBy: [{ role: "asc" }, { name: "asc" }] }),
     prisma.auditLog.findMany({ where: { tenantId: ctx.tenantId }, orderBy: { createdAt: "desc" }, take: 150 }),
     prisma.invoice.findMany({ where: { tenantId: ctx.tenantId }, orderBy: { issuedAt: "desc" } }),
     prisma.employee.count({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] } } }),
+    prisma.customRole.findMany({ where: { tenantId: ctx.tenantId }, include: { _count: { select: { users: true } } }, orderBy: { name: "asc" } }),
+    assignableRoles(ctx),
   ]);
-  const billing = can(ctx.role, "billing.manage");
   const q = quote(tenant.plan, headcount, tenant.billingCycle as "MONTHLY");
 
   return (
@@ -85,10 +42,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       <Tabs
         active={tab}
         tabs={[
-          { key: "workspace", label: "Workspace", href: "/settings?tab=workspace" },
-          { key: "users", label: "Users & roles", href: "/settings?tab=users", count: users.length },
-          { key: "audit", label: "Audit log", href: "/settings?tab=audit" },
-          { key: "privacy", label: "Data & PDPA", href: "/settings?tab=privacy" },
+          ...(manage ? [{ key: "workspace", label: "Workspace", href: "/settings?tab=workspace" }, { key: "users", label: "Users", href: "/settings?tab=users", count: users.length }, { key: "roles", label: "Roles & permissions", href: "/settings?tab=roles", count: ROLES.length + customRoles.length }] : []),
+          ...(auditor ? [{ key: "audit", label: "Audit log", href: "/settings?tab=audit" }] : []),
+          ...(manage ? [{ key: "privacy", label: "Data & PDPA", href: "/settings?tab=privacy" }] : []),
           ...(billing ? [{ key: "billing", label: "Plan & billing", href: "/settings?tab=billing" }] : []),
         ]}
       />
@@ -114,47 +70,122 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       )}
 
       {tab === "users" && (
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
-            <CardHeader title="Users" emoji="👥" subtitle="Create logins from an employee's profile." />
-            <Table>
-              <THead><tr><TH>User</TH><TH>Role</TH><TH>Last login</TH><TH>Status</TH><TH /></tr></THead>
-              <tbody>
-                {users.map((u) => (
-                  <TR key={u.id}>
-                    <TD><PersonCell name={u.name} sub={u.email} color={u.employee?.avatarColor} /></TD>
-                    <TD><Badge tone={u.role === "OWNER" ? "ink" : u.role === "HR_ADMIN" ? "purple" : u.role === "PAYROLL" ? "blue" : u.role === "MANAGER" ? "lime" : "gray"}>{ROLE_LABEL[u.role as keyof typeof ROLE_LABEL]}</Badge></TD>
-                    <TD className="text-xs">{u.lastLoginAt ? `${fmtDate(u.lastLoginAt)} ${fmtTime(u.lastLoginAt)}` : "Never"}</TD>
-                    <TD>{u.active ? <Badge tone="green">Active</Badge> : <Badge tone="gray">Disabled</Badge>}</TD>
-                    <TD className="text-right">
-                      {u.id !== ctx.userId && (
-                        <div className="flex justify-end gap-1">
-                          <FormModal trigger="Role" triggerSize="sm" triggerVariant="secondary" title={`Change role · ${u.name}`} action={roleAction}>
-                            <input type="hidden" name="userId" value={u.id} />
-                            <Field label="Role"><Select name="role" defaultValue={u.role} options={ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))} /></Field>
-                          </FormModal>
-                          <ActionButton action={activeAction} fields={{ userId: u.id, active: String(!u.active) }} variant={u.active ? "ghost" : "lime"} confirm={u.active ? `Disable ${u.name}'s login?` : undefined}>
-                            {u.active ? "Disable" : "Enable"}
-                          </ActionButton>
-                        </div>
-                      )}
-                    </TD>
-                  </TR>
-                ))}
-              </tbody>
-            </Table>
-          </Card>
-          <Card>
-            <CardHeader title="Role permissions" emoji="🔐" />
-            <CardBody className="space-y-3 text-xs">
-              {ROLES.map((r) => (
-                <div key={r}>
-                  <p className="font-bold">{ROLE_LABEL[r]} <span className="text-muted">({ROLE_PERMISSIONS[r].length})</span></p>
-                  <p className="text-ink-2">{ROLE_PERMISSIONS[r].length ? ROLE_PERMISSIONS[r].join(", ") : "Self-service only"}</p>
-                </div>
+        <Card>
+          <CardHeader
+            title="Users"
+            emoji="👥"
+            subtitle="Employees get logins from their profile. Invite people who aren't employees (accountants, auditors, consultants) here."
+            action={
+              <FormModal trigger="+ Invite user" triggerSize="sm" title="Invite a user" subtitle="If the email matches an employee without a login, the account is linked to them." action={inviteAction}>
+                <Field label="Full name"><Input name="name" required /></Field>
+                <Field label="Email"><Input type="email" name="email" required /></Field>
+                <Field label="Role"><Select name="role" defaultValue="EMPLOYEE" options={roleOptions} /></Field>
+                <Field label="Temporary password" hint="At least 8 characters. They can change it from Me → Profile."><Input name="password" defaultValue="Welcome2026!" required /></Field>
+              </FormModal>
+            }
+          />
+          <Table>
+            <THead><tr><TH>User</TH><TH>Role</TH><TH>Employee link</TH><TH>Last login</TH><TH>Status</TH><TH /></tr></THead>
+            <tbody>
+              {users.map((u) => (
+                <TR key={u.id}>
+                  <TD><PersonCell name={u.name} sub={u.email} color={u.employee?.avatarColor} /></TD>
+                  <TD>
+                    {u.role === "CUSTOM" ? (
+                      <Badge tone="pink">{u.customRole?.name ?? "Custom (deleted)"}</Badge>
+                    ) : (
+                      <Badge tone={u.role === "OWNER" ? "ink" : u.role === "HR_ADMIN" ? "purple" : u.role === "PAYROLL" ? "blue" : u.role === "MANAGER" ? "lime" : "gray"}>{ROLE_LABEL[u.role as keyof typeof ROLE_LABEL]}</Badge>
+                    )}
+                  </TD>
+                  <TD className="text-xs">{u.employee ? u.employee.fullName : <span className="text-muted">External user</span>}</TD>
+                  <TD className="text-xs">{u.lastLoginAt ? `${fmtDate(u.lastLoginAt)} ${fmtTime(u.lastLoginAt)}` : "Never"}</TD>
+                  <TD>{u.active ? <Badge tone="green">Active</Badge> : <Badge tone="gray">Disabled</Badge>}</TD>
+                  <TD className="text-right">
+                    {u.id !== ctx.userId && (
+                      <div className="flex justify-end gap-1">
+                        <FormModal trigger="Role" triggerSize="sm" triggerVariant="secondary" title={`Change role · ${u.name}`} action={roleAction}>
+                          <input type="hidden" name="userId" value={u.id} />
+                          <Field label="Role"><Select name="role" defaultValue={u.role === "CUSTOM" ? `CUSTOM:${u.customRoleId}` : u.role} options={roleOptions} /></Field>
+                        </FormModal>
+                        <FormModal trigger="Password" triggerSize="sm" triggerVariant="secondary" title={`Reset password · ${u.name}`} action={resetPasswordAction}>
+                          <input type="hidden" name="userId" value={u.id} />
+                          <Field label="New temporary password" hint="At least 8 characters"><Input name="password" required minLength={8} /></Field>
+                        </FormModal>
+                        <ActionButton action={activeAction} fields={{ userId: u.id, active: String(!u.active) }} variant={u.active ? "ghost" : "lime"} confirm={u.active ? `Disable ${u.name}'s login?` : undefined}>
+                          {u.active ? "Disable" : "Enable"}
+                        </ActionButton>
+                      </div>
+                    )}
+                  </TD>
+                </TR>
               ))}
-            </CardBody>
-          </Card>
+            </tbody>
+          </Table>
+        </Card>
+      )}
+
+      {tab === "roles" && (
+        <div className="space-y-6">
+          <Callout tone="sky" emoji="🔐">
+            <b>Built-in roles</b> are fixed presets. Create <b>custom roles</b> for anything else, e.g. &quot;Branch HR&quot;, &quot;Finance viewer&quot; or &quot;Recruiter&quot;. Choose exactly which permissions a role has, and whether it sees the <b>whole company</b> or only the holder&apos;s <b>team</b> (their reporting line). You can&apos;t grant permissions you don&apos;t have yourself.
+          </Callout>
+          <div className="flex justify-end">
+            <FormModal trigger="+ New custom role" title="New custom role" action={saveRoleAction} wide>
+              <RoleFields />
+            </FormModal>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {customRoles.map((r) => {
+              const perms = JSON.parse(r.permissions) as string[];
+              return (
+                <Card key={r.id}>
+                  <CardHeader
+                    title={r.name}
+                    emoji="🧩"
+                    subtitle={`${r.description ?? "Custom role"} · ${r._count.users} user(s)`}
+                    action={<Badge tone={r.scope === "ALL" ? "purple" : "lime"}>{r.scope === "ALL" ? "Whole company" : "Own team"}</Badge>}
+                  />
+                  <CardBody className="space-y-3">
+                    <div className="flex flex-wrap gap-1">
+                      {perms.map((p) => (
+                        <Badge key={p} tone="gray">{permissionLabel(p)}</Badge>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 border-t-2 border-dashed border-soft-line pt-3">
+                      <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${r.name}`} action={saveRoleAction} wide>
+                        <input type="hidden" name="id" value={r.id} />
+                        <RoleFields role={{ name: r.name, description: r.description, permissions: perms, scope: r.scope }} />
+                      </FormModal>
+                      <ActionButton action={deleteRoleAction} fields={{ id: r.id }} variant="ghost" confirm={`Delete role "${r.name}"?`}>
+                        Delete
+                      </ActionButton>
+                    </div>
+                  </CardBody>
+                </Card>
+              );
+            })}
+            {ROLES.map((r) => (
+              <Card key={r}>
+                <CardHeader
+                  title={ROLE_LABEL[r]}
+                  emoji="🔒"
+                  subtitle={`Built-in · ${users.filter((u) => u.role === r).length} user(s)`}
+                  action={<Badge tone={ROLE_SCOPE[r] === "ALL" ? "purple" : ROLE_SCOPE[r] === "TEAM" ? "lime" : "gray"}>{ROLE_SCOPE[r] === "ALL" ? "Whole company" : ROLE_SCOPE[r] === "TEAM" ? "Own team" : "Self only"}</Badge>}
+                />
+                <CardBody>
+                  <div className="flex flex-wrap gap-1">
+                    {ROLE_PERMISSIONS[r].length ? (
+                      ROLE_PERMISSIONS[r].map((p) => (
+                        <Badge key={p} tone="gray">{permissionLabel(p)}</Badge>
+                      ))
+                    ) : (
+                      <span className="text-xs text-muted">Self-service only: own leave, claims, payslips and profile</span>
+                    )}
+                  </div>
+                </CardBody>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
 
@@ -231,5 +262,41 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </div>
       )}
     </>
+  );
+}
+
+function RoleFields({ role }: { role?: { name: string; description: string | null; permissions: string[]; scope: string } }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <Field label="Role name">
+          <Input name="name" defaultValue={role?.name} required placeholder="Branch HR" />
+        </Field>
+        <Field label="Description" className="md:col-span-2">
+          <Input name="description" defaultValue={role?.description ?? ""} placeholder="HR for the Penang office" />
+        </Field>
+      </div>
+      <Field label="Data scope" hint="Team = the holder's direct and indirect reports (needs a linked employee profile).">
+        <Select name="scope" defaultValue={role?.scope ?? "TEAM"} options={[{ value: "TEAM", label: "Own team (reporting line)" }, { value: "ALL", label: "Whole company" }]} />
+      </Field>
+      <div className="grid gap-4 md:grid-cols-2">
+        {Object.entries(PERMISSION_CATALOG).map(([group, perms]) => (
+          <fieldset key={group} className="rounded-xl border-2 border-ink p-3">
+            <legend className="px-1 text-xs font-extrabold uppercase tracking-wider">{group}</legend>
+            <div className="space-y-1.5">
+              {Object.entries(perms).map(([key, label]) => (
+                <label key={key} className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input type="checkbox" name="permissions" value={key} defaultChecked={role?.permissions.includes(key)} className="mt-0.5 h-4 w-4" />
+                  <span>
+                    {label}
+                    <span className="block font-mono text-[10px] text-muted">{key}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ))}
+      </div>
+    </div>
   );
 }

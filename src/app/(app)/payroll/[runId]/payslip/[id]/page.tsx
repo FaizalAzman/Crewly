@@ -3,7 +3,7 @@ import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { PayslipView } from "@/components/payslip-view";
 import { LinkButton } from "@/components/ui";
-import { PrintButton } from "@/components/print-button";
+import { PdfButton } from "@/components/pdf-button";
 
 export default async function PayslipPage({ params }: { params: Promise<{ runId: string; id: string }> }) {
   const ctx = await requireCtx("payroll.manage");
@@ -17,7 +17,7 @@ export default async function PayslipPage({ params }: { params: Promise<{ runId:
     <>
       <div className="no-print mb-4 flex justify-between">
         <LinkButton href={`/payroll/${runId}`} variant="secondary">← Back to run</LinkButton>
-        <PrintButton />
+        <PdfButton href={`/api/pdf/payslip/${slip.id}`} />
       </div>
       <PayslipView slip={slip} />
       <div className="no-print mx-auto mt-6 max-w-3xl rounded-2xl border-2 border-dashed border-ink bg-paper-2 p-4 text-xs">

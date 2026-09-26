@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { round2 } from "@/lib/utils";
 import { assertCan, audit, notifyEmployee } from "../guard";
+import { can } from "@/lib/permissions";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { createEmployee, type EmployeeInput } from "./employee.service";
 
@@ -149,7 +150,7 @@ export async function submitSelfReview(ctx: Ctx, reviewId: string, rating: numbe
 export async function submitManagerReview(ctx: Ctx, reviewId: string, input: { rating: number; comment: string; strengths?: string; improvements?: string }) {
   const r = await prisma.performanceReview.findFirst({ where: { id: reviewId, tenantId: ctx.tenantId }, include: { employee: true } });
   if (!r) throw new DomainError("Review not found.");
-  const isReviewer = r.reviewerId === ctx.userId || ctx.role === "HR_ADMIN" || ctx.role === "OWNER";
+  const isReviewer = r.reviewerId === ctx.userId || can(ctx, "performance.manage");
   if (!isReviewer) throw new ForbiddenError("Only the assigned reviewer or HR can submit this review.");
   if (r.employeeId === ctx.employeeId) throw new ForbiddenError("You can't review yourself.");
   if (r.status !== "MANAGER_REVIEW") throw new DomainError(r.status === "SELF_REVIEW" ? "Waiting for the employee's self-review." : "Manager review already submitted.");
@@ -212,4 +213,62 @@ export async function hrdLevyBalance(tenantId: string, year: number) {
     .reduce((s, p) => s + p.costPerPax * p.enrollments.filter((e) => e.status !== "NO_SHOW").length, 0);
   const contributed = round2(levy._sum.hrdf ?? 0);
   return { contributed, utilised: round2(utilised), balance: round2(contributed - utilised) };
+}
+
+export async function updateJob(
+  ctx: Ctx,
+  id: string,
+  input: { title: string; departmentId?: string | null; location: string; employmentType: string; workMode: string; salaryMin?: number | null; salaryMax?: number | null; headcount: number; description?: string; closingDate?: Date | null },
+) {
+  assertCan(ctx, "recruitment.manage");
+  const job = await prisma.jobOpening.findFirst({ where: { id, tenantId: ctx.tenantId } });
+  if (!job) throw new DomainError("Job not found.");
+  if (!input.title) throw new DomainError("Job title is required.");
+  if (input.salaryMin && input.salaryMax && input.salaryMin > input.salaryMax) throw new DomainError("Minimum salary can't exceed maximum.");
+  if (input.headcount < 1) throw new DomainError("Headcount must be at least 1.");
+  return prisma.jobOpening.update({ where: { id }, data: input });
+}
+
+export async function updateCandidateNotes(ctx: Ctx, id: string, input: { notes?: string | null; resumeUrl?: string | null; expectedSalary?: number | null }) {
+  assertCan(ctx, "recruitment.manage");
+  const c = await prisma.candidate.findFirst({ where: { id, tenantId: ctx.tenantId } });
+  if (!c) throw new DomainError("Candidate not found.");
+  return prisma.candidate.update({ where: { id }, data: { notes: input.notes ?? c.notes, resumeUrl: input.resumeUrl ?? c.resumeUrl, expectedSalary: input.expectedSalary ?? c.expectedSalary } });
+}
+
+/** Public careers page application (no login). The job must be open and not past its closing date. */
+export async function applyToJob(
+  tenantSlug: string,
+  jobId: string,
+  input: { name: string; email: string; phone?: string | null; expectedSalary?: number | null; noticePeriod?: string | null; coverNote?: string | null; resumeUrl?: string | null },
+  today: Date = new Date(),
+) {
+  const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+  if (!tenant) throw new DomainError("Company not found.");
+  const job = await prisma.jobOpening.findFirst({ where: { id: jobId, tenantId: tenant.id } });
+  if (!job || job.status !== "OPEN") throw new DomainError("This position is no longer accepting applications.");
+  if (job.closingDate && job.closingDate < new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))) {
+    throw new DomainError("Applications for this position have closed.");
+  }
+  const email = input.email.trim().toLowerCase();
+  if (input.name.trim().length < 2) throw new DomainError("Please enter your full name.");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DomainError("Please enter a valid email.");
+  if (await prisma.candidate.findFirst({ where: { jobId, email } })) throw new DomainError("You've already applied for this role. We'll be in touch!");
+  const c = await prisma.candidate.create({
+    data: {
+      tenantId: tenant.id,
+      jobId,
+      name: input.name.trim(),
+      email,
+      phone: input.phone ?? null,
+      source: "CAREERS_PAGE",
+      expectedSalary: input.expectedSalary ?? null,
+      noticePeriod: input.noticePeriod ?? null,
+      notes: input.coverNote ? `Cover note: ${input.coverNote}` : null,
+      resumeUrl: input.resumeUrl ?? null,
+    },
+  });
+  const recruiters = await prisma.user.findMany({ where: { tenantId: tenant.id, active: true, role: { in: ["OWNER", "HR_ADMIN"] } } });
+  for (const u of recruiters) await prisma.notification.create({ data: { userId: u.id, title: `New applicant for ${job.title}`, body: c.name, link: `/recruitment/${job.id}` } });
+  return c;
 }

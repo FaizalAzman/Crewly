@@ -6,7 +6,10 @@ import { ActionButton, FormModal } from "@/components/forms";
 import { fmtDate, rm, todayMY } from "@/lib/utils";
 import { CITIZENSHIP, humanize } from "@/lib/constants";
 import { STAGES, canMoveStage, type Stage } from "@/server/services/talent.service";
-import { addCandidateAction, hireAction, interviewAction, moveCandidateAction, scoreAction } from "../actions";
+import { addCandidateAction, candidateNotesAction, hireAction, interviewAction, moveCandidateAction, scoreAction } from "../actions";
+import { Modal } from "@/components/forms";
+import { Attachment } from "@/components/attachment";
+import { ActionForm, SubmitButton } from "@/components/forms";
 
 const COLORS: Record<string, string> = { APPLIED: "bg-paper-2", SCREENING: "bg-sky/30", INTERVIEW: "bg-grape/20", OFFER: "bg-bubblegum/40", HIRED: "bg-mint/40", REJECTED: "bg-cherry/10" };
 
@@ -62,6 +65,9 @@ export default async function JobPage({ params }: { params: Promise<{ jobId: str
               <Field label="Notes">
                 <Textarea name="notes" />
               </Field>
+              <Field label="Résumé" hint="PDF or Word, max 5 MB">
+                <Input type="file" name="resumeFile" accept="application/pdf,.doc,.docx" className="py-1.5" />
+              </Field>
             </FormModal>
           </>
         }
@@ -96,7 +102,43 @@ export default async function JobPage({ params }: { params: Promise<{ jobId: str
                         {c.interviews[0].score ? ` · ${c.interviews[0].score}/5` : ""}
                       </p>
                     )}
+                    {c.resumeUrl && (
+                      <p className="mt-1 text-[11px]">
+                        <Attachment value={c.resumeUrl} label="Résumé" />
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-wrap gap-1">
+                      <Modal trigger="Details" triggerSize="sm" triggerVariant="secondary" title={c.name} subtitle={`${c.email}${c.phone ? ` · ${c.phone}` : ""}`} wide>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                            <p><span className="block text-[10px] font-bold uppercase text-muted">Stage</span>{humanize(c.stage)}</p>
+                            <p><span className="block text-[10px] font-bold uppercase text-muted">Source</span>{humanize(c.source)}</p>
+                            <p><span className="block text-[10px] font-bold uppercase text-muted">Current company</span>{c.currentCompany ?? "-"}</p>
+                            <p><span className="block text-[10px] font-bold uppercase text-muted">Notice</span>{c.noticePeriod ?? "-"}</p>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-xs font-bold uppercase text-muted">Interviews</p>
+                            {c.interviews.length === 0 && <p className="text-sm text-muted">None yet.</p>}
+                            {c.interviews.map((iv) => (
+                              <div key={iv.id} className="mb-2 rounded-xl border-2 border-soft-line p-2 text-sm">
+                                <b>{fmtDate(iv.scheduledAt)}</b> · {humanize(iv.mode)} · {iv.interviewer}
+                                {iv.score != null && <> · <b>{iv.score}/5</b> {iv.recommendation && humanize(iv.recommendation)}</>}
+                                {iv.feedback && <p className="text-xs text-ink-2">{iv.feedback}</p>}
+                              </div>
+                            ))}
+                          </div>
+                          <ActionForm action={candidateNotesAction} resetOnSuccess={false} className="space-y-3">
+                            <input type="hidden" name="id" value={c.id} />
+                            <input type="hidden" name="jobId" value={job.id} />
+                            <Field label="Notes"><Textarea name="notes" defaultValue={c.notes ?? ""} rows={4} /></Field>
+                            <div className="grid grid-cols-2 gap-3">
+                              <Field label="Expected salary (RM)"><Input type="number" name="expectedSalary" defaultValue={c.expectedSalary ?? ""} /></Field>
+                              <Field label={c.resumeUrl ? "Replace résumé" : "Upload résumé"}><Input type="file" name="resumeFile" accept="application/pdf,.doc,.docx" className="py-1.5" /></Field>
+                            </div>
+                            <SubmitButton size="sm">Save</SubmitButton>
+                          </ActionForm>
+                        </div>
+                      </Modal>
                       {STAGES.filter((s) => s !== "HIRED" && canMoveStage(c.stage as Stage, s) && Math.abs(STAGES.indexOf(s) - STAGES.indexOf(c.stage as Stage)) === 1).map((s) => (
                         <ActionButton key={s} action={moveCandidateAction} fields={{ id: c.id, stage: s, jobId: job.id }} size="sm" variant={STAGES.indexOf(s) > STAGES.indexOf(c.stage as Stage) ? "lime" : "secondary"}>
                           {STAGES.indexOf(s) > STAGES.indexOf(c.stage as Stage) ? `→ ${humanize(s)}` : `← ${humanize(s)}`}

@@ -8,12 +8,14 @@ import { HBarChart } from "@/components/charts";
 import { fmtDate, rm } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
 import { STAGES } from "@/server/services/talent.service";
-import { createJobAction, setJobStatusAction } from "./actions";
+import { createJobAction, setJobStatusAction, updateJobAction } from "./actions";
+import { LinkButton } from "@/components/ui";
 
 export const metadata: Metadata = { title: "Recruitment" };
 
 export default async function RecruitmentPage() {
   const ctx = await requireCtx("recruitment.manage");
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
   const [jobs, depts, candidates] = await Promise.all([
     prisma.jobOpening.findMany({ where: { tenantId: ctx.tenantId }, include: { department: true, candidates: true }, orderBy: [{ status: "asc" }, { createdAt: "desc" }] }),
     prisma.department.findMany({ where: { tenantId: ctx.tenantId } }),
@@ -31,6 +33,10 @@ export default async function RecruitmentPage() {
         emoji="🧲"
         subtitle="Job openings, candidate pipeline, interviews and one-click hiring."
         actions={
+          <>
+          <LinkButton href={`/careers/${tenant.slug}`} variant="secondary" target="_blank">
+            🌐 Public careers page
+          </LinkButton>
           <FormModal trigger="+ New job" title="New job opening" action={createJobAction} wide>
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="Job title" className="md:col-span-2">
@@ -65,6 +71,7 @@ export default async function RecruitmentPage() {
               </Field>
             </div>
           </FormModal>
+          </>
         }
       />
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -98,6 +105,21 @@ export default async function RecruitmentPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <StatusBadge status={j.status} />
+                      <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`Edit ${j.title}`} action={updateJobAction} wide>
+                        <input type="hidden" name="id" value={j.id} />
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <Field label="Job title" className="md:col-span-2"><Input name="title" defaultValue={j.title} required /></Field>
+                          <Field label="Department"><Select name="departmentId" defaultValue={j.departmentId ?? ""} placeholder="—" options={depts.map((d) => ({ value: d.id, label: d.name }))} /></Field>
+                          <Field label="Location"><Input name="location" defaultValue={j.location} /></Field>
+                          <Field label="Employment type"><Select name="employmentType" defaultValue={j.employmentType} options={["PERMANENT", "CONTRACT", "INTERN", "PART_TIME"]} /></Field>
+                          <Field label="Work mode"><Select name="workMode" defaultValue={j.workMode} options={["HYBRID", "ONSITE", "REMOTE"]} /></Field>
+                          <Field label="Salary min (RM)"><Input type="number" name="salaryMin" defaultValue={j.salaryMin ?? ""} /></Field>
+                          <Field label="Salary max (RM)"><Input type="number" name="salaryMax" defaultValue={j.salaryMax ?? ""} /></Field>
+                          <Field label="Headcount"><Input type="number" name="headcount" defaultValue={j.headcount} min={1} /></Field>
+                          <Field label="Closing date"><Input type="date" name="closingDate" defaultValue={j.closingDate?.toISOString().slice(0, 10) ?? ""} /></Field>
+                          <Field label="Description" className="md:col-span-2"><Textarea name="description" rows={5} defaultValue={j.description ?? ""} /></Field>
+                        </div>
+                      </FormModal>
                       {j.status === "OPEN" ? (
                         <ActionButton action={setJobStatusAction} fields={{ id: j.id, status: "ON_HOLD" }}>Pause</ActionButton>
                       ) : j.status !== "CLOSED" ? (

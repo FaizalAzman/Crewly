@@ -4,10 +4,13 @@ import { EmptyState } from "@/components/ui";
 
 const LINKS = [
   ["/me", "Overview"],
+  ["/me/profile", "Profile"],
   ["/me/leave", "Leave"],
+  ["/me/time", "Time & training"],
   ["/me/claims", "Claims & advances"],
   ["/me/payslips", "Payslips"],
   ["/me/tax", "Tax & reliefs"],
+  ["/me/documents", "Documents"],
 ];
 
 export default async function MeLayout({ children }: { children: React.ReactNode }) {

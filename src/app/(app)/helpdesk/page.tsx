@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: "Helpdesk" };
 
 export default async function HelpdeskPage() {
   const ctx = await requireCtx();
-  const agent = can(ctx.role, "helpdesk.manage");
+  const agent = can(ctx, "helpdesk.manage");
   const tickets = await prisma.ticket.findMany({
     where: { tenantId: ctx.tenantId, ...(agent ? {} : { employeeId: ctx.employeeId ?? "-" }) },
     include: { employee: true, _count: { select: { comments: true } } },

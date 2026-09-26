@@ -5,7 +5,8 @@ import { prisma } from "@/lib/db";
 import { Badge, Callout, Card, CardBody, CardHeader, Field, Input, PageHeader, PersonCell, Select, StatusBadge, Textarea } from "@/components/ui";
 import { FormModal } from "@/components/forms";
 import { act } from "@/server/action";
-import { closeCase, decideCase, DISCIPLINARY_STAGES, issueShowCause, openCase, recordReply, scheduleInquiry, suspendPendingInquiry } from "@/server/services/relations.service";
+import { closeCase, decideCase, DISCIPLINARY_STAGES, issueShowCause, openCase, recordReply, scheduleInquiry, showCauseLetter, suspendPendingInquiry } from "@/server/services/relations.service";
+import { ActionButton } from "@/components/forms";
 import { dateField, fmtDate, numField, str } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
 import type { ActionState } from "@/server/types";
@@ -49,6 +50,16 @@ async function stepAction(_: ActionState, fd: FormData): Promise<ActionState> {
     }
     revalidatePath("/disciplinary");
     return "Case updated";
+  });
+}
+
+async function letterAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("er.manage");
+  return act(async () => {
+    await showCauseLetter(ctx, str(fd, "id"));
+    revalidatePath("/documents");
+    return "Show-cause letter drafted. Review and issue it in Letters & policies.";
   });
 }
 
@@ -114,6 +125,9 @@ export default async function DisciplinaryPage() {
                     <Step id={c.id} step="showcause" label="Issue show-cause" variant="primary">
                       <Field label="Days to reply"><Input type="number" name="replyDays" defaultValue="3" min={2} /></Field>
                     </Step>
+                  )}
+                  {c.stage === "SHOW_CAUSE" && (
+                    <ActionButton action={letterAction} fields={{ id: c.id }}>✉️ Draft letter</ActionButton>
                   )}
                   {c.stage === "SHOW_CAUSE" && !c.replyReceived && (
                     <Step id={c.id} step="reply" label="Record reply">

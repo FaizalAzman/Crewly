@@ -7,7 +7,9 @@ import { can } from "@/lib/permissions";
 import { Avatar, Badge, Callout, Card, CardBody, CardHeader, Checkbox, EmptyState, Field, Input, KV, LinkButton, Money, Progress, Select, StatusBadge, Table, TD, TH, THead, TR, Tabs } from "@/components/ui";
 import { ActionButton, FormModal } from "@/components/forms";
 import { ageOn, fmtDate, rm, todayMY } from "@/lib/utils";
-import { humanize, ROLES, stateName } from "@/lib/constants";
+import { humanize, stateName } from "@/lib/constants";
+import { canSeeEmployee } from "@/server/guard";
+import { assignableRoles } from "@/server/services/roles.service";
 import { maskNric } from "@/lib/nric";
 import { serviceYears } from "@/lib/statutory/employment-act";
 import { childReliefTotal, pcbCategory } from "@/lib/statutory/pcb";
@@ -16,7 +18,7 @@ import { calcEis, calcSocso } from "@/lib/statutory/socso";
 import { available } from "@/server/services/leave.service";
 import { addChildAction, addDocumentAction, addRecurringPayAction, confirmAction, createLoginAction, extendProbationAction, removeChildAction, removeRecurringPayAction } from "../actions";
 
-const TABS = ["overview", "job", "pay", "family", "documents", "leave", "payslips", "history", "assets"] as const;
+const TABS = ["overview", "job", "pay", "family", "documents", "letters", "leave", "payslips", "history", "assets"] as const;
 
 export default async function EmployeePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const ctx = await requireCtx("employee.view");
@@ -41,9 +43,10 @@ export default async function EmployeePage({ params, searchParams }: { params: P
       permits: true,
     },
   });
-  if (!e) notFound();
-  const sensitive = can(ctx.role, "employee.sensitive") || ctx.employeeId === e.id;
-  const manage = can(ctx.role, "employee.manage");
+  if (!e || !(await canSeeEmployee(ctx, e.id))) notFound();
+  const roleOptions = can(ctx, "settings.manage") ? await assignableRoles(ctx) : [];
+  const sensitive = can(ctx, "employee.sensitive") || ctx.employeeId === e.id;
+  const manage = can(ctx, "employee.manage");
   const today = todayMY();
   const years = serviceYears(e.joinDate, today);
   const age = ageOn(e.dateOfBirth, today);
@@ -69,6 +72,11 @@ export default async function EmployeePage({ params, searchParams }: { params: P
           {manage && (
             <LinkButton href={`/employees/${e.id}/edit`} variant="secondary">
               <Pencil size={14} /> Edit
+            </LinkButton>
+          )}
+          {can(ctx, "lifecycle.manage") && ["ACTIVE", "PROBATION"].includes(e.status) && (
+            <LinkButton href={`/offboarding?employee=${e.id}`} variant="ghost">
+              Record separation
             </LinkButton>
           )}
           {manage && e.status === "PROBATION" && (
@@ -144,11 +152,11 @@ export default async function EmployeePage({ params, searchParams }: { params: P
                   <p className="text-sm">
                     <Badge tone="purple">{humanize(e.user.role)}</Badge> <span className="text-xs text-muted">last login {fmtDate(e.user.lastLoginAt)}</span>
                   </p>
-                ) : can(ctx.role, "settings.manage") ? (
+                ) : can(ctx, "settings.manage") ? (
                   <FormModal trigger="Create login" triggerVariant="secondary" triggerSize="sm" title="Create login" action={createLoginAction}>
                     <input type="hidden" name="employeeId" value={e.id} />
                     <Field label="Role">
-                      <Select name="role" defaultValue="EMPLOYEE" options={ROLES.filter((r) => r !== "OWNER" || ctx.role === "OWNER").map((r) => r)} />
+                      <Select name="role" defaultValue="EMPLOYEE" options={roleOptions} />
                     </Field>
                     <Field label="Temporary password">
                       <Input name="password" defaultValue="Welcome2026!" />
@@ -197,7 +205,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
         </Card>
       )}
 
-      {tab === "pay" && sensitive && <PayTab e={e} manage={can(ctx.role, "payroll.manage")} tenantId={ctx.tenantId} />}
+      {tab === "pay" && sensitive && <PayTab e={e} manage={can(ctx, "payroll.manage")} tenantId={ctx.tenantId} />}
 
       {tab === "family" && (
         <Card>
@@ -276,7 +284,10 @@ export default async function EmployeePage({ params, searchParams }: { params: P
                   <Field label="Name">
                     <Input name="name" required placeholder="Degree certificate" />
                   </Field>
-                  <Field label="Link / file reference">
+                  <Field label="File" hint="PDF, image or Word, max 5 MB">
+                    <Input type="file" name="file" accept="image/*,application/pdf,.doc,.docx" className="py-1.5" />
+                  </Field>
+                  <Field label="…or link">
                     <Input name="url" placeholder="https://drive…" />
                   </Field>
                   <Field label="Expiry date (optional)">
@@ -301,7 +312,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
               <tbody>
                 {e.documents.map((d) => (
                   <TR key={d.id}>
-                    <TD className="font-semibold">{d.url ? <a href={d.url} className="underline">{d.name}</a> : d.name}</TD>
+                    <TD className="font-semibold">{d.url ? <a href={d.url} target="_blank" rel="noreferrer" className="underline">{d.name}</a> : d.name}</TD>
                     <TD>{humanize(d.type)}</TD>
                     <TD>{d.expiryDate ? <Badge tone={d.expiryDate < today ? "red" : "gray"}>{fmtDate(d.expiryDate)}</Badge> : "-"}</TD>
                     <TD className="text-xs">{fmtDate(d.createdAt)}</TD>
@@ -313,6 +324,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
         </Card>
       )}
 
+      {tab === "letters" && <LettersTab employeeId={e.id} />}
       {tab === "leave" && <LeaveTab employeeId={e.id} />}
       {tab === "payslips" && sensitive && <PayslipsTab employeeId={e.id} />}
 
@@ -576,6 +588,48 @@ async function PayslipsTab({ employeeId }: { employeeId: string }) {
                 <TD><StatusBadge status={s.run.status} /></TD>
                 <TD className="text-right">
                   <Link href={`/payroll/${s.runId}/payslip/${s.id}`} className="text-xs font-bold underline">View</Link>
+                </TD>
+              </TR>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
+async function LettersTab({ employeeId }: { employeeId: string }) {
+  const letters = await prisma.generatedLetter.findMany({ where: { employeeId }, orderBy: { createdAt: "desc" } });
+  return (
+    <Card>
+      <CardHeader title="Letters" emoji="✉️" subtitle="Generated from templates in Letters & policies" action={<Link href="/documents" className="text-xs font-bold underline">Generate</Link>} />
+      {letters.length === 0 ? (
+        <EmptyState emoji="✉️" title="No letters yet" />
+      ) : (
+        <Table>
+          <THead>
+            <tr>
+              <TH>Letter</TH>
+              <TH>Status</TH>
+              <TH>Issued</TH>
+              <TH />
+            </tr>
+          </THead>
+          <tbody>
+            {letters.map((l) => (
+              <TR key={l.id}>
+                <TD className="font-semibold">{l.title.split(" — ")[0]}</TD>
+                <TD>
+                  <Badge tone={l.status === "ACKNOWLEDGED" ? "green" : l.status === "ISSUED" ? "orange" : "gray"}>{humanize(l.status)}</Badge>
+                </TD>
+                <TD className="text-xs">
+                  {fmtDate(l.issuedAt)}
+                  {l.acknowledgedAt && ` · ack'd ${fmtDate(l.acknowledgedAt)}`}
+                </TD>
+                <TD className="text-right">
+                  <Link href={`/documents/letters/${l.id}`} className="text-xs font-bold underline">
+                    Open
+                  </Link>
                 </TD>
               </TR>
             ))}

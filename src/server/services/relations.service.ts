@@ -155,7 +155,7 @@ export function passportOkForRenewal(passportExpiry: Date | null, today: Date = 
 
 export async function upsertPermit(
   ctx: Ctx,
-  input: { id?: string; employeeId: string; permitType: string; permitNo: string; sector: string; sourceCountry: string; issueDate: Date; expiryDate: Date; levyAmount: number; fomemaDate?: Date | null; fomemaStatus: string; insuranceNo?: string | null; insuranceExpiry?: Date | null },
+  input: { id?: string; employeeId: string; permitType: string; permitNo: string; sector: string; sourceCountry: string; issueDate: Date; expiryDate: Date; levyAmount: number; levyPaidUntil?: Date | null; fomemaDate?: Date | null; fomemaStatus: string; insuranceNo?: string | null; insuranceExpiry?: Date | null },
 ) {
   assertCan(ctx, "foreign.manage");
   const emp = await prisma.employee.findFirst({ where: { id: input.employeeId, tenantId: ctx.tenantId } });
@@ -196,4 +196,19 @@ export function bookValue(cost: number, purchaseDate: Date | null, lifeYears = 3
   if (!purchaseDate) return cost;
   const years = daysBetween(purchaseDate, today) / 365.25;
   return Math.max(0, Math.round(cost * (1 - years / lifeYears) * 100) / 100);
+}
+
+/** Generates a show-cause letter draft from the SHOW_CAUSE template, pre-filled with the case details. */
+export async function showCauseLetter(ctx: Ctx, caseId: string) {
+  assertCan(ctx, "er.manage");
+  const c = await prisma.disciplinaryCase.findFirst({ where: { id: caseId, tenantId: ctx.tenantId } });
+  if (!c) throw new DomainError("Case not found.");
+  const tpl = await prisma.letterTemplate.findFirst({ where: { tenantId: ctx.tenantId, category: "SHOW_CAUSE" } });
+  if (!tpl) throw new DomainError("No show-cause letter template. Add one in Letters & policies.");
+  const { generateLetter, updateLetter } = await import("./culture.service");
+  const letter = await generateLetter(ctx, tpl.id, c.employeeId);
+  const detail = `${c.description} (Case ${c.caseNo}, incident on ${c.incidentDate.toISOString().slice(0, 10)})`;
+  const content = letter.content.replace(/\[Describe the alleged misconduct[^\]]*\]/, detail);
+  await updateLetter(ctx, letter.id, content);
+  return letter;
 }

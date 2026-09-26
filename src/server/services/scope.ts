@@ -6,7 +6,7 @@ import type { Ctx } from "../types";
  * Returns null for "everyone in the tenant" (HR-level roles).
  */
 export async function approvalScope(ctx: Ctx): Promise<string[] | null> {
-  if (ctx.role === "OWNER" || ctx.role === "HR_ADMIN" || ctx.role === "PAYROLL") return null;
+  if (ctx.scope === "ALL") return null;
   if (!ctx.employeeId) return [];
   const result: string[] = [];
   let frontier = [ctx.employeeId];

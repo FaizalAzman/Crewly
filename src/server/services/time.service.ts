@@ -204,3 +204,38 @@ export function otSummary(rows: { hours: number; amount: number; status: string 
   const counted = rows.filter((r) => r.status !== "REJECTED");
   return { hours: round2(counted.reduce((s, r) => s + r.hours, 0)), amount: round2(counted.reduce((s, r) => s + r.amount, 0)) };
 }
+
+/**
+ * End-of-day absence marking: every active employee without a clock-in on a working day (per their state's
+ * holidays and the work week) and not on approved leave gets an ABSENT record. Returns how many were marked.
+ */
+export async function markAbsentees(ctx: Ctx, date: Date) {
+  assertCan(ctx, "attendance.manage");
+  if (date > todayMY()) throw new DomainError("You can't mark absences for a future date.");
+  const ww = await tenantWorkWeek(ctx.tenantId);
+  const emps = await prisma.employee.findMany({
+    where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] }, joinDate: { lte: date }, OR: [{ lastWorkingDate: null }, { lastWorkingDate: { gte: date } }] },
+    include: { branch: true, company: true },
+  });
+  const [records, leave, roster] = await Promise.all([
+    prisma.attendanceRecord.findMany({ where: { tenantId: ctx.tenantId, date }, select: { employeeId: true } }),
+    prisma.leaveRequest.findMany({ where: { tenantId: ctx.tenantId, status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } }, select: { employeeId: true } }),
+    prisma.rosterEntry.findMany({ where: { tenantId: ctx.tenantId, date }, select: { employeeId: true, dayType: true } }),
+  ]);
+  const has = new Set(records.map((r) => r.employeeId));
+  const away = new Set(leave.map((l) => l.employeeId));
+  const cache = new Map<string, Set<string>>();
+  let marked = 0;
+  for (const e of emps) {
+    if (has.has(e.id) || away.has(e.id)) continue;
+    const r = roster.find((x) => x.employeeId === e.id);
+    if (r && r.dayType !== "WORK") continue;
+    const state = e.branch?.state ?? e.company.state ?? e.state;
+    if (!cache.has(state)) cache.set(state, await holidaySet(ctx.tenantId, state, date, date));
+    if (!r && dayKind(date, ww, cache.get(state)!) !== "WORK") continue;
+    await prisma.attendanceRecord.create({ data: { tenantId: ctx.tenantId, employeeId: e.id, date, status: "ABSENT", source: "MANUAL", note: "No clock-in, marked absent" } });
+    marked++;
+  }
+  await audit(ctx, "UPDATE", "Attendance", null, `Marked ${marked} absentee(s) for ${date.toISOString().slice(0, 10)}`);
+  return marked;
+}

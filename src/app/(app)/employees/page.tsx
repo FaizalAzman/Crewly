@@ -24,7 +24,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
   if (sp.q) {
     where.OR = [{ fullName: { contains: sp.q } }, { employeeNo: { contains: sp.q } }, { email: { contains: sp.q } }, { jobTitle: { contains: sp.q } }, { icNo: { contains: sp.q } }];
   }
-  if (ctx.role === "MANAGER" && ctx.employeeId) {
+  if (ctx.scope !== "ALL" && ctx.employeeId) {
     where.AND = [{ OR: [{ managerId: ctx.employeeId }, { manager: { managerId: ctx.employeeId } }, { id: ctx.employeeId }] }];
   }
 
@@ -34,7 +34,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
     prisma.company.findMany({ where: { tenantId: ctx.tenantId } }),
     prisma.employee.groupBy({ by: ["status"], where: { tenantId: ctx.tenantId }, _count: true }),
   ]);
-  const sensitive = can(ctx.role, "employee.sensitive");
+  const sensitive = can(ctx, "employee.sensitive");
   const count = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
   const qs = new URLSearchParams(Object.entries(sp).filter(([, v]) => v) as [string, string][]).toString();
 
@@ -51,7 +51,12 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
                 <Download size={15} /> Export CSV
               </a>
             )}
-            {can(ctx.role, "employee.manage") && (
+            {can(ctx, "employee.manage") && (
+              <LinkButton href="/employees/import" variant="secondary">
+                Import CSV
+              </LinkButton>
+            )}
+            {can(ctx, "employee.manage") && (
               <LinkButton href="/employees/new">
                 <Plus size={15} /> Add employee
               </LinkButton>

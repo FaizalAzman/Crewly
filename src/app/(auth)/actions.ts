@@ -7,6 +7,9 @@ import { SESSION_COOKIE, SESSION_TTL_SECONDS, signSession } from "@/lib/auth/ses
 import { DomainError, type ActionState } from "@/server/types";
 import { ZodError } from "zod";
 import { str } from "@/lib/utils";
+import { prisma } from "@/lib/db";
+import { can } from "@/lib/permissions";
+import { ctxFromUser } from "@/server/ctx";
 
 async function startSession(user: { id: string; tenantId: string; role: string }) {
   const token = await signSession({ uid: user.id, tid: user.tenantId, role: user.role });
@@ -21,16 +24,17 @@ async function startSession(user: { id: string; tenantId: string; role: string }
 }
 
 export async function loginAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  let role = "EMPLOYEE";
+  let landing = "/me";
   try {
     const user = await authenticate(str(fd, "email"), str(fd, "password"));
     await startSession(user);
-    role = user.role;
+    const full = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, include: { customRole: true } });
+    landing = can(ctxFromUser(full), "employee.view") ? "/dashboard" : "/me";
   } catch (e) {
     if (e instanceof DomainError) return { ok: false, error: e.message };
     throw e;
   }
-  redirect(role === "EMPLOYEE" ? "/me" : "/dashboard");
+  redirect(landing);
 }
 
 export async function signupAction(_: ActionState, fd: FormData): Promise<ActionState> {

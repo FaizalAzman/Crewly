@@ -133,9 +133,12 @@ input[type="checkbox"] {
 }
 
 @media print {
+  @page { size: A4; margin: 18mm 16mm; }
   .no-print { display: none !important; }
-  body { background: white; }
-  .print-plain { box-shadow: none !important; border: none !important; }
+  body, .bg-dots { background: white !important; }
+  .print-plain { box-shadow: none !important; border: none !important; border-radius: 0 !important; }
+  .print-shell { padding: 0 !important; }
+  .letter-page { max-width: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

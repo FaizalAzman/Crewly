@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { bootstrapTenant } from "@/server/services/bootstrap.service";
 import { createEmployee, type EmployeeInput } from "@/server/services/employee.service";
 import type { Ctx } from "@/server/types";
+import { ctxFromUser } from "@/server/ctx";
 import type { Role } from "@/lib/constants";
 
 export const D = (s: string) => new Date(`${s}T00:00:00.000Z`);
@@ -50,7 +51,7 @@ export async function makeWorld(opts: { state?: string; withBranchGeofence?: boo
     const u = await prisma.user.create({
       data: { tenantId: tenant.id, email: `${role.toLowerCase()}-${randomUUID().slice(0, 8)}@test.my`, name: `${role} User`, role, employeeId, passwordHash: "x" },
     });
-    return { tenantId: tenant.id, userId: u.id, userName: u.name, role, employeeId };
+    return ctxFromUser(u);
   };
 
   const owner = await mkUser("OWNER");

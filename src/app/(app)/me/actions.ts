@@ -12,6 +12,7 @@ import { createSeparation } from "@/server/services/lifecycle.service";
 import { toggleTask } from "@/server/services/lifecycle.service";
 import { fileGrievance } from "@/server/services/relations.service";
 import { DomainError, type ActionState } from "@/server/types";
+import { fileOrText } from "@/server/services/upload.service";
 import { boolField, dateField, numField, optStr, str } from "@/lib/utils";
 
 function me(ctx: { employeeId: string | null }) {
@@ -51,7 +52,7 @@ export async function applyLeaveAction(_: ActionState, fd: FormData): Promise<Ac
       endDate: end,
       halfDay: (optStr(fd, "halfDay") as "AM" | "PM" | null) ?? null,
       reason: optStr(fd, "reason"),
-      attachment: optStr(fd, "attachment"),
+      attachment: await fileOrText(ctx, fd, "attachmentFile", "attachment", "LEAVE"),
     });
     return `Leave submitted: ${r.days} day(s). Your manager has been notified.`;
   }, ["/me", "/me/leave", "/leave", "/approvals"]);
@@ -76,7 +77,7 @@ export async function submitClaimAction(_: ActionState, fd: FormData): Promise<A
       mileageKm: str(fd, "mileageKm") ? numField(fd, "mileageKm") : null,
       description: str(fd, "description"),
       merchant: optStr(fd, "merchant"),
-      receiptUrl: optStr(fd, "receiptUrl"),
+      receiptUrl: await fileOrText(ctx, fd, "receiptFile", "receiptUrl", "RECEIPT"),
     });
     return `Claim of RM${c.amount.toFixed(2)} submitted 🧾`;
   }, ["/me", "/me/claims", "/claims", "/approvals"]);

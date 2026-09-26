@@ -1,12 +1,24 @@
 import type { Metadata } from "next";
 import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
-import { Card, CardHeader, Money, PageHeader, PersonCell, Progress, StatCard, StatusBadge, Table, TD, TH, THead, TR } from "@/components/ui";
+import { Card, CardHeader, Field, Input, Money, PageHeader, PersonCell, Progress, StatCard, StatusBadge, Table, TD, TH, THead, TR } from "@/components/ui";
 import { DecideButtons } from "@/components/decide-buttons";
 import { LoanButton } from "@/components/request-forms";
-import { loanSchedule } from "@/server/services/money.service";
-import { rm } from "@/lib/utils";
+import { loanSchedule, recordLoanRepayment } from "@/server/services/money.service";
+import { FormModal } from "@/components/forms";
+import { act } from "@/server/action";
+import { numField, rm, str } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
+import type { ActionState } from "@/server/types";
+
+async function repayAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("loans.manage");
+  return act(async () => {
+    const l = await recordLoanRepayment(ctx, str(fd, "id"), numField(fd, "amount"), str(fd, "note"));
+    return l.status === "SETTLED" ? "Loan fully settled 🎉" : `Recorded. Balance now RM${l.balance.toFixed(2)}`;
+  }, ["/loans"]);
+}
 
 export const metadata: Metadata = { title: "Loans & advances" };
 
@@ -56,7 +68,16 @@ export default async function LoansPage() {
                   </TD>
                   <TD className="text-right font-bold"><Money value={l.balance} /></TD>
                   <TD><StatusBadge status={l.status} /></TD>
-                  <TD>{l.status === "PENDING" && <DecideButtons kind="loan" id={l.id} requireReason={false} />}</TD>
+                  <TD>
+                    {l.status === "PENDING" && <DecideButtons kind="loan" id={l.id} requireReason={false} />}
+                    {l.status === "ACTIVE" && (
+                      <FormModal trigger="Repayment" triggerSize="sm" triggerVariant="secondary" title={`Record repayment · ${l.employee.fullName}`} subtitle={`Outstanding RM${l.balance.toFixed(2)}`} action={repayAction}>
+                        <input type="hidden" name="id" value={l.id} />
+                        <Field label="Amount (RM)"><Input type="number" step="0.01" name="amount" defaultValue={l.balance} required /></Field>
+                        <Field label="How was it repaid?"><Input name="note" required placeholder="Bank transfer ref / cash receipt no." /></Field>
+                      </FormModal>
+                    )}
+                  </TD>
                 </TR>
               );
             })}

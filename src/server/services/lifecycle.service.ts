@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { noticePeriodWeeks, ordinaryRateOfPay, serviceYears, terminationBenefit } from "@/lib/statutory/employment-act";
-import { addDays, daysBetween, round2, todayMY } from "@/lib/utils";
+import { addDays, daysBetween, periodOf, round2, todayMY } from "@/lib/utils";
 import { assertCan, audit, notifyEmployee } from "../guard";
 import { DomainError, type Ctx } from "../types";
 import { unusedAnnualLeave } from "./leave.service";
@@ -218,4 +218,62 @@ export async function markCp22a(ctx: Ctx, id: string) {
   const sep = await prisma.separation.findFirst({ where: { id, tenantId: ctx.tenantId } });
   if (!sep) throw new DomainError("Separation not found.");
   await prisma.separation.update({ where: { id }, data: { cp22aSubmitted: true } });
+}
+
+/**
+ * Posts the final settlement to the payroll of the last working month: leave encashment, termination benefit,
+ * notice pay (or the employee's notice indemnity as a deduction), and full recovery of outstanding loans.
+ */
+export async function postFinalSettlement(ctx: Ctx, id: string) {
+  assertCan(ctx, "lifecycle.manage");
+  const sep = await prisma.separation.findFirst({ where: { id, tenantId: ctx.tenantId }, include: { employee: true } });
+  if (!sep) throw new DomainError("Separation not found.");
+  if (!["APPROVED", "COMPLETED"].includes(sep.status)) throw new DomainError("Approve the separation first.");
+  if (sep.settlementPeriod) throw new DomainError(`Final settlement was already posted to ${sep.settlementPeriod}.`);
+  const period = periodOf(sep.lastWorkingDate);
+  const finalRun = await prisma.payrollRun.findFirst({ where: { companyId: sep.employee.companyId, period, status: { in: ["APPROVED", "PAID", "LOCKED"] } } });
+  if (finalRun) throw new DomainError(`Payroll for ${period} is already ${finalRun.status.toLowerCase()}. Reopen it or post manually.`);
+
+  const items = await prisma.payItem.findMany({ where: { tenantId: ctx.tenantId, code: { in: ["LEAVE_ENCASH", "TERM_BENEFIT", "NOTICE_PAY", "DED_OTHER"] } } });
+  const item = (code: string) => {
+    const it = items.find((i) => i.code === code);
+    if (!it) throw new DomainError(`Pay item ${code} is missing.`);
+    return it.id;
+  };
+  const lines: { payItemId: string; amount: number; note: string }[] = [];
+  if (sep.leaveEncashAmount > 0) lines.push({ payItemId: item("LEAVE_ENCASH"), amount: sep.leaveEncashAmount, note: `Unused annual leave (${sep.leaveEncashDays} days)` });
+  if (sep.terminationBenefit > 0) lines.push({ payItemId: item("TERM_BENEFIT"), amount: sep.terminationBenefit, note: "Termination benefit (EA regulations)" });
+  if (sep.noticePayInLieu > 0) lines.push({ payItemId: item("NOTICE_PAY"), amount: sep.noticePayInLieu, note: `Notice pay in lieu (${sep.shortfallDays} days)` });
+  if (sep.noticePayInLieu < 0) lines.push({ payItemId: item("DED_OTHER"), amount: -sep.noticePayInLieu, note: `Notice shortfall indemnity (${sep.shortfallDays} days)` });
+  for (const l of lines) await prisma.payrollAdjustment.create({ data: { tenantId: ctx.tenantId, employeeId: sep.employeeId, period, ...l } });
+
+  // Recover remaining loan balances in the final payroll.
+  const loans = await prisma.loan.findMany({ where: { employeeId: sep.employeeId, status: "ACTIVE", balance: { gt: 0 } } });
+  for (const loan of loans) await prisma.loan.update({ where: { id: loan.id }, data: { installment: loan.balance, startPeriod: loan.startPeriod > period ? period : loan.startPeriod } });
+
+  await prisma.separation.update({ where: { id }, data: { settlementPeriod: period } });
+  await audit(ctx, "UPDATE", "Separation", id, `Posted final settlement for ${sep.employee.fullName} to ${period} payroll (${lines.length} item(s), ${loans.length} loan(s) recovered)`);
+  return { period, lines: lines.length, loans: loans.length };
+}
+
+export async function createChecklistTemplate(ctx: Ctx, name: string, type: "ONBOARDING" | "OFFBOARDING") {
+  assertCan(ctx, "lifecycle.manage");
+  if (name.trim().length < 3) throw new DomainError("Name the template.");
+  return prisma.checklistTemplate.create({ data: { tenantId: ctx.tenantId, name: name.trim(), type } });
+}
+
+export async function addTemplateItem(ctx: Ctx, templateId: string, input: { title: string; owner: string; dueOffsetDays: number }) {
+  assertCan(ctx, "lifecycle.manage");
+  const t = await prisma.checklistTemplate.findFirst({ where: { id: templateId, tenantId: ctx.tenantId }, include: { items: true } });
+  if (!t) throw new DomainError("Template not found.");
+  if (!input.title.trim()) throw new DomainError("Task title is required.");
+  if (Math.abs(input.dueOffsetDays) > 365) throw new DomainError("Due offset must be within ±365 days.");
+  return prisma.checklistTemplateItem.create({ data: { templateId, title: input.title.trim(), owner: input.owner, dueOffsetDays: input.dueOffsetDays, sortOrder: t.items.length } });
+}
+
+export async function removeTemplateItem(ctx: Ctx, itemId: string) {
+  assertCan(ctx, "lifecycle.manage");
+  const it = await prisma.checklistTemplateItem.findUnique({ where: { id: itemId }, include: { template: true } });
+  if (!it || it.template.tenantId !== ctx.tenantId) throw new DomainError("Item not found.");
+  await prisma.checklistTemplateItem.delete({ where: { id: itemId } });
 }

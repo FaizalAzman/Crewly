@@ -7,6 +7,8 @@ import { ColumnChart, HBarChart } from "@/components/charts";
 import { addDays, fmtDate, parsePeriod, periodLabel, rm, todayMY } from "@/lib/utils";
 import { holidayAppliesToState } from "@/lib/calendar";
 import { countPendingApprovals } from "@/server/services/approvals.service";
+import { approvalScope } from "@/server/services/scope";
+import { can } from "@/lib/permissions";
 import { permitAlert } from "@/server/services/relations.service";
 import { MONTHS, ACTIVE_STATUSES } from "@/lib/constants";
 
@@ -18,27 +20,42 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const T = ctx.tenantId;
   const today = todayMY();
   const year = today.getUTCFullYear();
+  // Scope: company-wide roles see everything; team roles see their reporting line only.
+  const team = await approvalScope(ctx);
+  const teamIds = team === null ? null : [...team, ...(ctx.employeeId ? [ctx.employeeId] : [])];
+  const inTeam = teamIds ? { id: { in: teamIds } } : {};
+  const inTeamEmp = teamIds ? { employeeId: { in: teamIds } } : {};
+  const seePay = can(ctx, "payroll.manage");
+  const seeCompliance = can(ctx, "payroll.manage") || can(ctx, "lifecycle.manage") || can(ctx, "foreign.manage");
+  const seeAudit = can(ctx, "audit.view");
 
   const [employees, onLeaveToday, pending, runs, holidays, permits, probation, audit, attendanceToday, depts, company] = await Promise.all([
     prisma.employee.findMany({
-      where: { tenantId: T, status: { in: ACTIVE_STATUSES } },
+      where: { tenantId: T, status: { in: ACTIVE_STATUSES }, ...inTeam },
       select: { id: true, fullName: true, preferredName: true, dateOfBirth: true, joinDate: true, avatarColor: true, jobTitle: true, departmentId: true, citizenship: true, gender: true, status: true },
     }),
     prisma.leaveRequest.findMany({
-      where: { tenantId: T, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today } },
+      where: { tenantId: T, status: "APPROVED", startDate: { lte: today }, endDate: { gte: today }, ...inTeamEmp },
       include: { employee: { select: { fullName: true, avatarColor: true, jobTitle: true } }, leaveType: true },
     }),
     countPendingApprovals(ctx),
-    prisma.payrollRun.findMany({ where: { tenantId: T, period: { startsWith: `${year}-` } }, orderBy: { period: "asc" } }),
+    seePay ? prisma.payrollRun.findMany({ where: { tenantId: T, period: { startsWith: `${year}-` } }, orderBy: { period: "asc" } }) : Promise.resolve([]),
     prisma.publicHoliday.findMany({ where: { date: { gte: today, lte: addDays(today, 60) }, OR: [{ tenantId: null }, { tenantId: T }] }, orderBy: { date: "asc" } }),
-    prisma.workPermit.findMany({ where: { tenantId: T }, include: { employee: { select: { fullName: true } } } }),
-    prisma.employee.findMany({ where: { tenantId: T, status: "PROBATION" }, orderBy: { confirmationDate: "asc" }, take: 5 }),
-    prisma.auditLog.findMany({ where: { tenantId: T, action: { not: "LOGIN" } }, orderBy: { createdAt: "desc" }, take: 7 }),
-    prisma.attendanceRecord.count({ where: { tenantId: T, date: today, clockIn: { not: null } } }),
+    seeCompliance ? prisma.workPermit.findMany({ where: { tenantId: T }, include: { employee: { select: { fullName: true } } } }) : Promise.resolve([]),
+    prisma.employee.findMany({ where: { tenantId: T, status: "PROBATION", ...inTeam }, orderBy: { confirmationDate: "asc" }, take: 5 }),
+    seeAudit ? prisma.auditLog.findMany({ where: { tenantId: T, action: { not: "LOGIN" } }, orderBy: { createdAt: "desc" }, take: 7 }) : Promise.resolve([]),
+    prisma.attendanceRecord.count({ where: { tenantId: T, date: today, clockIn: { not: null }, ...inTeamEmp } }),
     prisma.department.findMany({ where: { tenantId: T } }),
     prisma.company.findFirst({ where: { tenantId: T, isDefault: true } }),
   ]);
 
+  const upcomingLeave = seePay
+    ? []
+    : await prisma.leaveRequest.findMany({
+        where: { tenantId: T, status: { in: ["APPROVED", "PENDING"] }, startDate: { gt: today, lte: addDays(today, 14) }, ...inTeamEmp },
+        include: { employee: { select: { fullName: true, avatarColor: true, jobTitle: true } }, leaveType: true },
+        orderBy: { startDate: "asc" },
+      });
   const headcount = employees.length;
   const latest = [...runs].reverse().find(Boolean);
   const byPeriod = new Map<string, { net: number; statutory: number; tax: number }>();
@@ -84,8 +101,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         subtitle="Here's what's happening across your company today."
         actions={
           <>
-            <LinkButton href="/employees/new" variant="secondary">+ Add employee</LinkButton>
-            <LinkButton href="/payroll" variant="primary">Run payroll →</LinkButton>
+            {can(ctx, "employee.manage") && <LinkButton href="/employees/new" variant="secondary">+ Add employee</LinkButton>}
+            {seePay && <LinkButton href="/payroll" variant="primary">Run payroll →</LinkButton>}
+            {!seePay && <LinkButton href="/approvals" variant="primary">Approvals →</LinkButton>}
           </>
         }
       />
@@ -99,13 +117,18 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Active headcount" value={headcount} hint={`${employees.filter((e) => e.status === "PROBATION").length} on probation · ${employees.filter((e) => e.citizenship === "FOREIGNER").length} foreign`} tone="lime" emoji="🧑‍🤝‍🧑" href="/employees" />
+        <StatCard label={teamIds ? "My team" : "Active headcount"} value={headcount} hint={`${employees.filter((e) => e.status === "PROBATION").length} on probation · ${employees.filter((e) => e.citizenship === "FOREIGNER").length} foreign`} tone="lime" emoji="🧑‍🤝‍🧑" href="/employees" />
         <StatCard label="Out today" value={onLeaveToday.length} hint={`${attendanceToday} clocked in so far`} tone="sky" emoji="🌴" href="/leave?tab=calendar" />
         <StatCard label="Pending approvals" value={pending} hint="Leave, claims, OT, loans & pay" tone="bubblegum" emoji="✅" href="/approvals" />
-        <StatCard label={latestPeriod ? `Employer cost · ${periodLabel(latestPeriod)}` : "Employer cost"} value={rm(latestCost, { decimals: 0 })} hint={latest ? `Latest run: ${latest.status.toLowerCase()}` : "No payroll yet"} tone="sunny" emoji="💸" href="/payroll" />
+        {seePay ? (
+          <StatCard label={latestPeriod ? `Employer cost · ${periodLabel(latestPeriod)}` : "Employer cost"} value={rm(latestCost, { decimals: 0 })} hint={latest ? `Latest run: ${latest.status.toLowerCase()}` : "No payroll yet"} tone="sunny" emoji="💸" href="/payroll" />
+        ) : (
+          <StatCard label="Leave in next 14 days" value={upcomingLeave.length} hint="Approved + pending" tone="sunny" emoji="🗓️" href="/leave?tab=calendar" />
+        )}
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
+        {seePay ? (
         <Card className="xl:col-span-2">
           <CardHeader title="Payroll cost this year" subtitle="Net pay, statutory contributions (EPF, SOCSO, EIS, HRD Corp) and tax (PCB + zakat), all entities" emoji="📈" />
           <CardBody>
@@ -124,6 +147,22 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             )}
           </CardBody>
         </Card>
+        ) : (
+          <Card className="xl:col-span-2">
+            <CardHeader title="Team leave, next 14 days" emoji="🗓️" subtitle="Plan cover before it hits" />
+            <CardBody className="space-y-3">
+              {upcomingLeave.length === 0 && <p className="text-sm text-muted">No leave coming up.</p>}
+              {upcomingLeave.map((l) => (
+                <div key={l.id} className="flex items-center justify-between gap-2">
+                  <PersonCell name={l.employee.fullName} sub={`${l.leaveType.emoji} ${l.leaveType.name} · ${l.days} day(s)`} color={l.employee.avatarColor} />
+                  <span className="text-xs font-semibold">
+                    {fmtDate(l.startDate)} – {fmtDate(l.endDate)} {l.status === "PENDING" && <Badge tone="yellow">pending</Badge>}
+                  </span>
+                </div>
+              ))}
+            </CardBody>
+          </Card>
+        )}
         <Card>
           <CardHeader title="Headcount by department" emoji="🏢" />
           <CardBody>
@@ -133,6 +172,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        {seeCompliance ? (
         <Card>
           <CardHeader title="Compliance radar" subtitle="Deadlines and things that need attention" emoji="🛡️" />
           <CardBody className="space-y-3">
@@ -152,6 +192,17 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             ))}
           </CardBody>
         </Card>
+        ) : (
+          <Card>
+            <CardHeader title="Your team" emoji="🧑‍🤝‍🧑" action={<Link href="/employees" className="text-xs font-bold underline">All</Link>} />
+            <CardBody className="space-y-2.5">
+              {employees.filter((e) => e.id !== ctx.employeeId).slice(0, 8).map((e) => (
+                <PersonCell key={e.id} name={e.fullName} sub={e.jobTitle} color={e.avatarColor} href={`/employees/${e.id}`} />
+              ))}
+              {employees.length <= 1 && <p className="text-sm text-muted">No direct reports yet.</p>}
+            </CardBody>
+          </Card>
+        )}
 
         <Card>
           <CardHeader title="Who's out today" emoji="🏖️" action={<Link href="/leave?tab=calendar" className="text-xs font-bold underline">Calendar</Link>} />
@@ -215,6 +266,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             })}
           </CardBody>
         </Card>
+        {seeAudit && (
         <Card>
           <CardHeader title="Recent activity" emoji="⚡" action={<Link href="/settings?tab=audit" className="text-xs font-bold underline">Audit log</Link>} />
           <CardBody className="space-y-2.5">
@@ -228,6 +280,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             ))}
           </CardBody>
         </Card>
+        )}
       </div>
     </>
   );

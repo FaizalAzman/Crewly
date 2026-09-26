@@ -45,3 +45,6 @@ next-env.d.ts
 *.db-journal
 prisma/*.db*
 !.env.example
+
+# uploaded files
+/storage

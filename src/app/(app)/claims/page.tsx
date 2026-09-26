@@ -13,6 +13,7 @@ import { act } from "@/server/action";
 import { boolField, fmtDate, numField, optStr, rm, round2, str, todayMY } from "@/lib/utils";
 import { humanize } from "@/lib/constants";
 import { scopedEmployeeWhere } from "@/server/services/scope";
+import { Attachment } from "@/components/attachment";
 import { DomainError, type ActionState } from "@/server/types";
 
 export const metadata: Metadata = { title: "Claims" };
@@ -92,7 +93,7 @@ export default async function ClaimsPage({ searchParams }: { searchParams: Promi
         <StatCard label={`Reimbursed ${year}`} value={rm(all.filter((c) => c.status === "PAID").reduce((s, c) => s + c.amount, 0), { decimals: 0 })} tone="lime" emoji="✅" />
         <StatCard label="Claim types" value={types.filter((t) => t.active).length} tone="white" emoji="🗂️" />
       </div>
-      <Tabs active={tab} tabs={[{ key: "claims", label: "Claims", href: "/claims?tab=claims" }, { key: "insights", label: "Spend by type", href: "/claims?tab=insights" }, ...(can(ctx.role, "claims.pay") ? [{ key: "types", label: "Claim types & limits", href: "/claims?tab=types" }] : [])]} />
+      <Tabs active={tab} tabs={[{ key: "claims", label: "Claims", href: "/claims?tab=claims" }, { key: "insights", label: "Spend by type", href: "/claims?tab=insights" }, ...(can(ctx, "claims.pay") ? [{ key: "types", label: "Claim types & limits", href: "/claims?tab=types" }] : [])]} />
       {tab === "claims" && (
         <Card>
           <div className="flex flex-wrap gap-2 border-b-2 border-ink p-3">
@@ -124,6 +125,7 @@ export default async function ClaimsPage({ searchParams }: { searchParams: Promi
                     {c.description}
                     {c.mileageKm && ` · ${c.mileageKm} km`}
                     {c.merchant && <span className="block text-muted">@ {c.merchant}</span>}
+                    {c.receiptUrl && <span className="block"><Attachment value={c.receiptUrl} label="Receipt" /></span>}
                   </TD>
                   <TD className="text-right font-bold"><Money value={c.amount} /></TD>
                   <TD><StatusBadge status={c.status} /></TD>

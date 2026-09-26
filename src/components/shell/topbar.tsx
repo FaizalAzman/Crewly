@@ -127,7 +127,7 @@ export function Topbar({
               <p className="truncate text-xs text-muted">{user.email}</p>
               <p className="mt-1 inline-block rounded-full border-2 border-ink bg-sunny px-2 text-[10px] font-bold">{user.role}</p>
             </div>
-            <Link href="/me" onClick={() => setMenuOpen(false)} className="mt-1 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-paper-2">
+            <Link href="/me/profile" onClick={() => setMenuOpen(false)} className="mt-1 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-paper-2">
               <UserRound size={15} /> My profile
             </Link>
             <button onClick={() => logout()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-cherry hover:bg-paper-2">

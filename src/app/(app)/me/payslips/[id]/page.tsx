@@ -3,7 +3,7 @@ import { requireCtx } from "@/server/context";
 import { prisma } from "@/lib/db";
 import { PayslipView } from "@/components/payslip-view";
 import { LinkButton } from "@/components/ui";
-import { PrintButton } from "@/components/print-button";
+import { PdfButton } from "@/components/pdf-button";
 
 export default async function MyPayslipPage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireCtx();
@@ -17,7 +17,7 @@ export default async function MyPayslipPage({ params }: { params: Promise<{ id: 
     <>
       <div className="no-print mb-4 flex justify-between">
         <LinkButton href="/me/payslips" variant="secondary">← All payslips</LinkButton>
-        <PrintButton />
+        <PdfButton href={`/api/pdf/payslip/${slip.id}`} />
       </div>
       <PayslipView slip={slip} />
     </>

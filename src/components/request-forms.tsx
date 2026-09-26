@@ -39,8 +39,11 @@ export async function ApplyLeaveButton({ tenantId, gender, onBehalf, btn = {} }:
       <Field label="Reason">
         <Textarea name="reason" placeholder="Family trip, medical appointment…" />
       </Field>
-      <Field label="Supporting document / MC no." hint="Required for sick & hospitalisation leave">
-        <Input name="attachment" placeholder="MC-KL-12345 or file link" />
+      <Field label="Medical certificate / supporting document" hint="Required for sick & hospitalisation leave. PDF or photo, max 5 MB.">
+        <Input type="file" name="attachmentFile" accept="image/*,application/pdf" className="py-1.5" />
+      </Field>
+      <Field label="…or reference number">
+        <Input name="attachment" placeholder="MC-KL-12345" />
       </Field>
     </FormModal>
   );
@@ -85,8 +88,8 @@ export async function ClaimButton({ tenantId, onBehalf, btn = {} }: { tenantId: 
       <Field label="What was it for?">
         <Textarea name="description" required />
       </Field>
-      <Field label="Receipt (file name / link)" hint="Required for most claim types">
-        <Input name="receiptUrl" placeholder="receipt.jpg" />
+      <Field label="Receipt" hint="Photo or PDF, max 5 MB. Required for most claim types.">
+        <Input type="file" name="receiptFile" accept="image/*,application/pdf" className="py-1.5" />
       </Field>
     </FormModal>
   );

@@ -6,7 +6,8 @@ import { prisma } from "@/lib/db";
 import { Badge, Card, CardHeader, Field, Input, PageHeader, PersonCell, Select, StatCard, StatusBadge, Table, Tabs, TD, TH, THead, TR, Textarea } from "@/components/ui";
 import { FormModal } from "@/components/forms";
 import { act } from "@/server/action";
-import { manualAttendance } from "@/server/services/time.service";
+import { manualAttendance, markAbsentees } from "@/server/services/time.service";
+import { ActionButton } from "@/components/forms";
 import { addDays, fmtDate, fmtTime, parseDate, str, todayMY, toISODate } from "@/lib/utils";
 import type { ActionState } from "@/server/types";
 
@@ -21,6 +22,16 @@ async function manualAction(_: ActionState, fd: FormData): Promise<ActionState> 
     await manualAttendance(ctx, { employeeId: str(fd, "employeeId"), date, clockIn: t("in"), clockOut: t("out"), status: str(fd, "status") || "PRESENT", note: str(fd, "note") });
     revalidatePath("/attendance");
     return "Attendance updated";
+  });
+}
+
+async function absenteesAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  "use server";
+  const ctx = await requireCtx("attendance.manage");
+  return act(async () => {
+    const n = await markAbsentees(ctx, parseDate(str(fd, "date"))!);
+    revalidatePath("/attendance");
+    return n ? `Marked ${n} employee(s) absent` : "Everyone is accounted for 🎉";
   });
 }
 
@@ -49,6 +60,10 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
         emoji="📍"
         subtitle="Web and mobile clock-ins with GPS geofence, lateness and timesheets."
         actions={
+          <>
+          <ActionButton action={absenteesAction} fields={{ date: toISODate(date) }} variant="secondary" size="md" confirm={`Mark everyone without a clock-in on ${toISODate(date)} (and not on leave) as ABSENT?`}>
+            Mark absentees
+          </ActionButton>
           <FormModal trigger="Manual entry" triggerVariant="secondary" title="Manual attendance entry" subtitle="Changes are audited." action={manualAction}>
             <Field label="Employee">
               <Select name="employeeId" options={empOpts} />
@@ -71,6 +86,7 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
               <Textarea name="note" required placeholder="Forgot to clock in, verified by manager" />
             </Field>
           </FormModal>
+          </>
         }
       />
       <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">

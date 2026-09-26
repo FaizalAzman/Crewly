@@ -39,13 +39,14 @@ import {
   BarChart3,
   Settings,
   Circle,
+  Contact,
   type LucideIcon,
 } from "lucide-react";
 import { Logo } from "../logo";
 import { cn } from "@/lib/utils";
 import type { NavGroup } from "./nav";
 
-const ICONS: Record<string, LucideIcon> = { LayoutDashboard, Smile, CheckCheck, Users, Network, Magnet, Rocket, DoorOpen, Palmtree, CalendarHeart, Fingerprint, CalendarClock, Timer, Banknote, ListPlus, Landmark, Receipt, Wallet, HandCoins, TrendingUp, HeartPulse, Target, GraduationCap, Gavel, ShieldAlert, Globe2, FileText, Laptop, PartyPopper, LifeBuoy, BarChart3, Settings, Circle };
+const ICONS: Record<string, LucideIcon> = { LayoutDashboard, Smile, CheckCheck, Users, Network, Magnet, Rocket, DoorOpen, Palmtree, CalendarHeart, Fingerprint, CalendarClock, Timer, Banknote, ListPlus, Landmark, Receipt, Wallet, HandCoins, TrendingUp, HeartPulse, Target, GraduationCap, Gavel, ShieldAlert, Globe2, FileText, Laptop, PartyPopper, LifeBuoy, BarChart3, Settings, Circle, Contact };
 
 export function Sidebar({ groups, badges, tenantName, plan }: { groups: NavGroup[]; badges: Record<string, number>; tenantName: string; plan: string }) {
   const pathname = usePathname();
@@ -89,7 +90,7 @@ export function Sidebar({ groups, badges, tenantName, plan }: { groups: NavGroup
   return (
     <>
       <button
-        className="fixed left-3 top-3 z-50 rounded-xl border-2 border-ink bg-card p-2 shadow-brutal-sm lg:hidden"
+        className="no-print fixed left-3 top-3 z-50 rounded-xl border-2 border-ink bg-card p-2 shadow-brutal-sm lg:hidden"
         onClick={() => setOpen((o) => !o)}
         aria-label="Toggle menu"
       >
@@ -98,7 +99,7 @@ export function Sidebar({ groups, badges, tenantName, plan }: { groups: NavGroup
       {open && <div className="fixed inset-0 z-30 bg-ink/40 lg:hidden" onClick={() => setOpen(false)} />}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r-2 border-ink bg-paper-2 transition-transform lg:translate-x-0",
+          "no-print fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r-2 border-ink bg-paper-2 transition-transform lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >

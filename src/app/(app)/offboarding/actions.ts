@@ -2,11 +2,11 @@
 
 import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
-import { approveSeparation, completeSeparation, createSeparation, markCp22a, withdrawSeparation, type SeparationType } from "@/server/services/lifecycle.service";
+import { approveSeparation, completeSeparation, createSeparation, markCp22a, postFinalSettlement, withdrawSeparation, type SeparationType } from "@/server/services/lifecycle.service";
 import type { ActionState } from "@/server/types";
 import { boolField, dateField, optStr, str } from "@/lib/utils";
 
-const P = ["/offboarding", "/employees", "/dashboard", "/tax"];
+const P = ["/offboarding", "/employees", "/dashboard", "/tax", "/payroll"];
 
 export async function createSeparationAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireCtx("lifecycle.manage");
@@ -34,6 +34,10 @@ export async function separationStepAction(_: ActionState, fd: FormData): Promis
       case "cp22a":
         await markCp22a(ctx, id);
         return "CP22A marked as submitted";
+      case "settle": {
+        const r = await postFinalSettlement(ctx, id);
+        return `Final settlement posted to ${r.period} payroll. Recalculate that run to include it.`;
+      }
       case "withdraw":
         await withdrawSeparation(ctx, id);
         return "Separation withdrawn";

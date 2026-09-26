@@ -5,10 +5,14 @@ import { prisma } from "@/lib/db";
 import { Badge, Callout, Card, CardHeader, Money, PageHeader, PersonCell, Select, Table, Tabs, TD, TH, THead, TR, btnClass } from "@/components/ui";
 import { SalaryCalculator } from "@/components/salary-calculator";
 import { EaFormView } from "@/components/ea-form-view";
-import { PrintButton } from "@/components/print-button";
+import { PdfButton } from "@/components/pdf-button";
 import { eaForm } from "@/server/services/tax.service";
 import { tp1Total } from "@/server/services/payroll.service";
 import { addDays, fmtDate, rm, todayMY } from "@/lib/utils";
+import { FormModal } from "@/components/forms";
+import { Field, Input } from "@/components/ui";
+import { TP1_FIELDS } from "@/lib/tax-reliefs";
+import { saveTaxDeclarationAction } from "../me/actions";
 
 export const metadata: Metadata = { title: "Tax (LHDN)" };
 
@@ -138,18 +142,55 @@ async function EaTab({ ctx, year, employeeId }: { ctx: Awaited<ReturnType<typeof
             <Download size={14} /> CP8D · {c.name.split(" ")[0]} {c.name.split(" ")[1] ?? ""}
           </a>
         ))}
-        <PrintButton label="Print EA" />
+        {selected && <PdfButton href={`/api/pdf/ea/${selected}?year=${year}`} label="Download Form EA" />}
       </div>
       {ea ? <EaFormView ea={ea} /> : <p className="text-sm text-muted">No payroll data for {year}.</p>}
     </div>
   );
 }
 
+function DeclarationFields({ d }: { d?: Record<string, unknown> | null }) {
+  const v = (k: string) => (d && Number(d[k]) ? Number(d[k]) : "");
+  return (
+    <>
+      <p className="text-xs font-bold uppercase text-muted">TP1 · additional reliefs (annual)</p>
+      <div className="grid grid-cols-2 gap-3">
+        {TP1_FIELDS.map(([k, label, cap]) => (
+          <Field key={k} label={label} hint={`Max ${rm(cap, { decimals: 0 })}`}>
+            <Input type="number" step="0.01" min={0} name={k} defaultValue={v(k)} />
+          </Field>
+        ))}
+      </div>
+      <p className="text-xs font-bold uppercase text-muted">TP3 · previous employer this year</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Gross remuneration"><Input type="number" step="0.01" name="prevGross" defaultValue={v("prevGross")} /></Field>
+        <Field label="EPF"><Input type="number" step="0.01" name="prevEpf" defaultValue={v("prevEpf")} /></Field>
+        <Field label="PCB"><Input type="number" step="0.01" name="prevPcb" defaultValue={v("prevPcb")} /></Field>
+        <Field label="Zakat"><Input type="number" step="0.01" name="prevZakat" defaultValue={v("prevZakat")} /></Field>
+      </div>
+    </>
+  );
+}
+
 async function Declarations({ tenantId, year }: { tenantId: string; year: number }) {
-  const rows = await prisma.taxDeclaration.findMany({ where: { year, employee: { tenantId } }, include: { employee: true } });
+  const [rows, emps] = await Promise.all([
+    prisma.taxDeclaration.findMany({ where: { year, employee: { tenantId } }, include: { employee: true } }),
+    prisma.employee.findMany({ where: { tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] } }, orderBy: { fullName: "asc" } }),
+  ]);
   return (
     <Card>
-      <CardHeader title={`Declarations ${year}`} emoji="🧾" subtitle="Employees submit these from Me → Tax & reliefs" />
+      <CardHeader
+        title={`Declarations ${year}`}
+        emoji="🧾"
+        subtitle="Employees submit these from Me → Tax & reliefs. HR can enter them from paper TP1/TP3 forms."
+        action={
+          <FormModal trigger="+ Enter declaration" triggerSize="sm" title="Enter TP1 / TP3 for an employee" action={saveTaxDeclarationAction} wide>
+            <input type="hidden" name="year" value={year} />
+            <Field label="Employee"><Select name="employeeId" options={emps.filter((e) => !rows.some((r) => r.employeeId === e.id)).map((e) => ({ value: e.id, label: `${e.fullName} (${e.employeeNo})` }))} /></Field>
+            <DeclarationFields />
+          </FormModal>
+        }
+      />
       <Table>
         <THead>
           <tr>
@@ -158,6 +199,7 @@ async function Declarations({ tenantId, year }: { tenantId: string; year: number
             <TH className="text-right">TP3 gross</TH>
             <TH className="text-right">TP3 PCB</TH>
             <TH>Updated</TH>
+            <TH />
           </tr>
         </THead>
         <tbody>
@@ -168,11 +210,18 @@ async function Declarations({ tenantId, year }: { tenantId: string; year: number
               <TD className="text-right"><Money value={r.prevGross} /></TD>
               <TD className="text-right"><Money value={r.prevPcb} /></TD>
               <TD className="text-xs">{fmtDate(r.updatedAt)}</TD>
+              <TD className="text-right">
+                <FormModal trigger="Edit" triggerSize="sm" triggerVariant="secondary" title={`TP1 / TP3 · ${r.employee.fullName}`} action={saveTaxDeclarationAction} wide>
+                  <input type="hidden" name="year" value={year} />
+                  <input type="hidden" name="employeeId" value={r.employeeId} />
+                  <DeclarationFields d={r as unknown as Record<string, unknown>} />
+                </FormModal>
+              </TD>
             </TR>
           ))}
           {rows.length === 0 && (
             <TR>
-              <TD colSpan={5} className="text-sm text-muted">No declarations yet.</TD>
+              <TD colSpan={6} className="text-sm text-muted">No declarations yet.</TD>
             </TR>
           )}
         </tbody>

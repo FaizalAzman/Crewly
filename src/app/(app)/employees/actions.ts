@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { assertCan } from "@/server/guard";
 import { boolField, dateField, numField, optStr, str } from "@/lib/utils";
 import type { ActionState } from "@/server/types";
+import { fileOrText } from "@/server/services/upload.service";
 
 function parseEmployeeForm(fd: FormData): EmployeeInput {
   return {
@@ -133,7 +134,7 @@ export async function addDocumentAction(_: ActionState, fd: FormData): Promise<A
   return act(async () => {
     assertCan(ctx, "employee.manage");
     await prisma.employeeDocument.create({
-      data: { employeeId: id, type: str(fd, "type") || "OTHER", name: str(fd, "name"), url: optStr(fd, "url"), expiryDate: dateField(fd, "expiryDate") },
+      data: { employeeId: id, type: str(fd, "type") || "OTHER", name: str(fd, "name"), url: await fileOrText(ctx, fd, "file", "url", "DOCUMENT"), expiryDate: dateField(fd, "expiryDate") },
     });
     return "Document added";
   }, [`/employees/${id}`]);

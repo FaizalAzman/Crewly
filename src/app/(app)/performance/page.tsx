@@ -16,10 +16,10 @@ export default async function PerformancePage() {
   const ctx = await requireCtx("performance.review");
   const [cycles, goals, emps] = await Promise.all([
     prisma.reviewCycle.findMany({ where: { tenantId: ctx.tenantId }, include: { reviews: true }, orderBy: { startDate: "desc" } }),
-    prisma.goal.findMany({ where: { tenantId: ctx.tenantId, ...(ctx.role === "MANAGER" ? { employee: { managerId: ctx.employeeId } } : {}) }, include: { employee: true, cycle: true }, orderBy: [{ employeeId: "asc" }] }),
+    prisma.goal.findMany({ where: { tenantId: ctx.tenantId, ...(ctx.scope !== "ALL" ? { employee: { managerId: ctx.employeeId } } : {}) }, include: { employee: true, cycle: true }, orderBy: [{ employeeId: "asc" }] }),
     prisma.employee.findMany({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION"] } }, orderBy: { fullName: "asc" } }),
   ]);
-  const manage = can(ctx.role, "performance.manage");
+  const manage = can(ctx, "performance.manage");
   const active = cycles.find((c) => c.status === "ACTIVE");
   return (
     <>
