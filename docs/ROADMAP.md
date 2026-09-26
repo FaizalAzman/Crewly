@@ -22,8 +22,8 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 
 | Feature | Law | What it does | Effort |
 |---|---|---|---|
-| **Wage-payment deadline guard** | EA 1955 s.19 (wages within 7 days after the wage period; OT by the end of the next wage period) | Validate the workspace pay day and each run's pay date; warn on the dashboard when a run will be paid late. | S |
-| **50% deduction cap** | EA 1955 s.24(8) | Sum all deductions on a payslip (loans, advances, recoveries, other) and block approval when they exceed 50% of wages earned, except the categories the Act exempts. Today only single loan instalments are capped. | S |
+| **Wage-payment deadline guard** | EA 1955 s.19 (wages within 7 days after the wage period; OT by the end of the next wage period) | **Shipped:** the workspace pay day and each run's pay date are validated. Next: warn on the dashboard when a run will be paid late, and track OT paid in the following wage period. | S |
+| **50% deduction cap** | EA 1955 s.24(8) | The engine already flags payslips whose non-statutory deductions exceed 50% of wages, and approval is now blocked on negative net pay. Next: confirm which deduction categories s.24(8) exempts (e.g. notice indemnity, advance recovery), then block approval on the rest. | S |
 | **Hourly / part-time minimum wage** | Minimum Wages Order 2024 (RM1,700/month from 1 Feb 2025, with a later date for employers with fewer than 5 staff); Employment (Part-Time Employees) Regulations 2010 | Hourly/daily rate checks for part-timers and interns, pro-rated part-time leave. The engine checks the monthly figure only. | M |
 | **Salary arrears & mid-month changes** | EA 1955 s.2 "wages", s.19 | Backdated increments generate arrears lines, and changes effective mid-month pro-rate. Scheduled future changes now apply automatically (shipped). | M |
 | **e-PCB Plus / e-Data PCB export** | Income Tax Act 1967 s.107A; Income Tax (Deduction from Remuneration) Rules 1994 | Produce the current LHDN upload format and keep the CP39 file in step with it. | S |
@@ -34,7 +34,7 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 
 | Feature | Law | What it does | Effort |
 |---|---|---|---|
-| **Protected-status dismissal block** | EA 1955 s.41A (pregnant or on maternity leave); Minimum Retirement Age Act 2012 (age 60) | Block or require override justification when terminating a pregnant employee or someone on maternity leave, or "retiring" someone under 60. | S |
+| **Protected-status dismissal block** | EA 1955 s.41A (pregnant or on maternity leave); Minimum Retirement Age Act 2012 (age 60) | **Shipped:** retrenchment or termination is blocked while maternity leave is booked or in progress (dismissal for misconduct via a concluded disciplinary case is still allowed), and nobody can be retired before 60. Next: a pregnancy flag the employee can declare, so protection starts before maternity leave is booked. | S |
 | **Unfair-dismissal readiness** | Industrial Relations Act 1967 s.20 (60-day window); case law on domestic inquiry | For termination-type separations, require the show-cause record, inquiry notes and decision letter before approval, and track the 60-day representation window. | M |
 | **Settlement reversal** | Same as above | Withdrawing a separation after the final settlement is posted is now blocked (shipped). Next: a one-click reversal that removes those payroll adjustments and restores loan schedules. | S |
 | **CP22A timing** | ITA 1967 s.83 (notify LHDN at least one month before cessation) | Count down to the CP22A deadline from the resignation date, and hold the final payment until LHDN clearance where required. | S |
@@ -58,7 +58,7 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 | **Retention schedules & erasure** | PDPA 2010 s.10 (retention principle); EA 1955 s.61 and Employment Regulations 1957 (keep records at least 6 years) | Per-category retention (e.g. rejected candidates 12 months, payroll 7 years), then anonymise or delete with an audit trail. | M |
 | **Per-person data export** | PDPA (Amendment) Act 2024 (data portability); PDPA 2010 s.30–31 (access requests, 21-day response) | Employee-level JSON/PDF export from Me → Profile, and an HR-side access-request workflow with the 21-day response clock. | S |
 | **Biometric clock-in consent** | PDPA (Amendment) Act 2024 adds biometric data to sensitive personal data | If we add face or fingerprint kiosks, require explicit consent and keep a non-biometric alternative. | M |
-| **2FA for admins & session revocation** | PDPA 2010 s.9 (security principle) | TOTP for Owner/HR/Payroll; a "log out everywhere" option and session invalidation on password change. JWTs currently stay valid for 12 h. | M |
+| **2FA for admins & session revocation** | PDPA 2010 s.9 (security principle) | **Session revocation shipped** ("log out of all devices", password change, admin reset, deactivation). Next: TOTP for Owner/HR/Payroll. | M |
 
 ### Foreign workforce & workplace safety
 
@@ -82,6 +82,7 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 
 | Feature | Why customers want it | Effort |
 |---|---|---|
+| **Role-based "getting started" guidance** | Owners get a six-step setup checklist (`/welcome`), but invited HR, payroll, managers and employees land with no orientation. Add a first-login checklist per role (e.g. employee: check profile & bank details, submit TP1 reliefs, try clock-in; manager: find the approvals inbox), short in-page tips on first visit, a `/help` page of task guides, and a friendlier invitation email that explains what the person can do. | M |
 | **Bahasa Malaysia UI** | Many SME owners, supervisors and factory staff prefer BM. It's also needed for the PDPA notice. Use `next-intl` with EN/BM, and later 中文 and தமிழ் for payslips. | L |
 | **WhatsApp notifications & approvals** | WhatsApp is how Malaysian teams actually communicate. Send leave/claim approvals with one-tap approve links and payslip-ready alerts through the WhatsApp Business API. | M |
 | **Installable PWA for Me** | Clock-in, leave, claims and payslips from the home screen, with offline clock-in queued until the connection returns. | M |
@@ -121,13 +122,15 @@ Effort: **S** ≤ 1 week, **M** 2–4 weeks, **L** > 1 month (one engineer).
 | **E2E tests** | Playwright journeys for sign-up → first payroll, leave → approval → payslip, and resignation → settlement, plus `instant()` navigation checks. | M |
 | **React Compiler** | Enable `reactCompiler: true` once build-time cost is acceptable, and remove manual memoisation. | S |
 
-## Remaining flow gaps found in the September 2026 audit
+## Flow gaps from the September 2026 audit
 
-These are known and not yet fixed. The PR that added this file fixed the rest (see its description).
+All six gaps listed after the first audit are now closed:
 
-1. **Concurrent payroll recalculation.** Two people pressing "Calculate" at the same moment can race. It needs a run-level lock (a CAS on a `calculating` flag, or a job queue).
-2. **Manual loan repayment between calculation and payment.** The payslip still deducts the old instalment. Recalculate the run automatically, or block manual repayments while a run is calculated.
-3. **Sequential reference numbers** (ticket, grievance, invoice) use `count + 1` and can collide under concurrency. Use a per-tenant counter row or a unique index with retry.
-4. **Plan seat limit** is checked before insert without a lock, so two simultaneous hires can exceed it by one.
-5. **Password change doesn't revoke other sessions** (see 2FA & session revocation above).
-6. **Performance-review and letter status changes** still read then write. They're low risk, but they should use the same compare-and-set helper (`claimTransition` in `src/server/guard.ts`).
+1. **Concurrent payroll recalculation.** A run-level lock (`calculatingSince`, claimed with compare-and-set) stops two calculations from interleaving. A lock older than 10 minutes counts as abandoned.
+2. **Payroll inputs changing after calculation.** Adjustments, manual loan repayments and approving or cancelling unpaid leave send the affected calculated run back to draft, so stale figures can't be approved. A manual repayment is refused while an approved, unpaid run already deducts the loan.
+3. **Reference numbers** for tickets, grievances, disciplinary cases and invoices come from an atomic per-tenant counter (`Sequence`) instead of `count + 1`.
+4. **Plan seat limit** is checked again after insert, and the new row is rolled back if the limit was exceeded.
+5. **Session revocation.** Each session carries the user's `sessionVersion`. Changing your password signs out your other devices. An admin password reset, deactivation or "Log out of all devices" signs out every device. A reset link works only once, even when used twice at the same moment.
+6. **Performance-review and letter status changes** use `claimTransition`, so an edit that races an "Issue" can't change a letter's issued text.
+
+Still open: two new hires at the same instant can compute the same automatic employee number. The second then fails with a clear "already exists" message and succeeds on retry.
