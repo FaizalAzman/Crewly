@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { assertCan, audit } from "../guard";
 import { DomainError, ForbiddenError, type Ctx } from "../types";
 import { assertNoEscalation, resolveRoleKey } from "./roles.service";
-import { hashPassword, verifyPassword } from "./auth.service";
+import { hashPassword, sendInvite, verifyPassword } from "./auth.service";
 
 export interface WorkspaceSettings {
   name: string;
@@ -70,7 +70,8 @@ export async function inviteUser(ctx: Ctx, input: { name: string; email: string;
     data: { tenantId: ctx.tenantId, email, name: input.name.trim(), role: target.role, customRoleId: target.customRoleId, employeeId: employee?.id ?? null, passwordHash: await hashPassword(input.password) },
   });
   await audit(ctx, "CREATE", "User", user.id, `Invited ${user.name} as ${target.label}`);
-  return user;
+  const inviteLink = await sendInvite(user.id, ctx.userName);
+  return Object.assign(user, { inviteLink });
 }
 
 /** Admin password reset. */
@@ -120,8 +121,11 @@ export function quote(plan: string, seats: number, cycle: "MONTHLY" | "YEARLY") 
   return { price, billable, subtotal, sst, total: Math.round((subtotal + sst) * 100) / 100 };
 }
 
+/** During the free trial the plan can be switched freely; paid changes go through checkout. */
 export async function changePlan(ctx: Ctx, plan: string, cycle: "MONTHLY" | "YEARLY") {
   assertCan(ctx, "billing.manage");
+  const current = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
+  if (current.subscriptionStatus !== "TRIALING") throw new DomainError("To change a paid plan, use checkout so the new price is billed.");
   if (!PLAN_PRICES[plan]) throw new DomainError("Unknown plan.");
   const active = await prisma.employee.count({ where: { tenantId: ctx.tenantId, status: { in: ["ACTIVE", "PROBATION", "NOTICE"] } } });
   if (plan === "STARTER" && active > 25) throw new DomainError(`Starter supports up to 25 employees; you have ${active}.`);
@@ -129,4 +133,34 @@ export async function changePlan(ctx: Ctx, plan: string, cycle: "MONTHLY" | "YEA
   if (plan !== "ENTERPRISE" && multi > 1) throw new DomainError("Multiple legal entities require the Enterprise plan.");
   await prisma.tenant.update({ where: { id: ctx.tenantId }, data: { plan, billingCycle: cycle } });
   await audit(ctx, "UPDATE", "Tenant", ctx.tenantId, `Plan changed to ${plan} (${cycle.toLowerCase()})`);
+}
+
+/** PDPA data portability: a JSON export of the whole workspace (owner only). */
+export async function exportWorkspace(ctx: Ctx) {
+  if (ctx.role !== "OWNER") throw new ForbiddenError("Only the owner can export the whole workspace.");
+  const T = ctx.tenantId;
+  const [tenant, companies, employees, leave, payroll, payslips, claims, loans, attendance, letters, policies] = await Promise.all([
+    prisma.tenant.findUniqueOrThrow({ where: { id: T } }),
+    prisma.company.findMany({ where: { tenantId: T }, include: { branches: true } }),
+    prisma.employee.findMany({ where: { tenantId: T }, include: { children: true, history: true, documents: true, payItems: true } }),
+    prisma.leaveRequest.findMany({ where: { tenantId: T } }),
+    prisma.payrollRun.findMany({ where: { tenantId: T } }),
+    prisma.payslip.findMany({ where: { tenantId: T }, include: { lines: true } }),
+    prisma.claim.findMany({ where: { tenantId: T } }),
+    prisma.loan.findMany({ where: { tenantId: T }, include: { repayments: true } }),
+    prisma.attendanceRecord.findMany({ where: { tenantId: T } }),
+    prisma.generatedLetter.findMany({ where: { tenantId: T } }),
+    prisma.policy.findMany({ where: { tenantId: T } }),
+  ]);
+  await audit(ctx, "EXPORT", "Tenant", T, "Exported the full workspace (contains personal data, PDPA)");
+  return { exportedAt: new Date().toISOString(), workspace: { name: tenant.name, slug: tenant.slug, plan: tenant.plan }, companies, employees, leave, payroll, payslips, claims, loans, attendance, letters, policies };
+}
+
+/** Owner closes the workspace. Data is retained 30 days (support can restore), then may be purged. */
+export async function closeWorkspace(ctx: Ctx, confirmName: string) {
+  if (ctx.role !== "OWNER") throw new ForbiddenError("Only the owner can close the workspace.");
+  const t = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
+  if (confirmName.trim() !== t.name) throw new DomainError(`Type the workspace name exactly ("${t.name}") to confirm.`);
+  await prisma.tenant.update({ where: { id: t.id }, data: { closedAt: new Date(), subscriptionStatus: "CANCELLED" } });
+  await audit(ctx, "DELETE", "Tenant", t.id, "Workspace closed by owner");
 }

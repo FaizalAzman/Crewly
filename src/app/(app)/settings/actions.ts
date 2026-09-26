@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { act } from "@/server/action";
 import { requireCtx } from "@/server/context";
-import { changeOwnPassword, changePlan, changeUserRole, inviteUser, resetUserPassword, setUserActive, updateWorkspace } from "@/server/services/settings.service";
+import { changeOwnPassword, changePlan, changeUserRole, closeWorkspace, inviteUser, resetUserPassword, setUserActive, updateWorkspace } from "@/server/services/settings.service";
+import { cancelSubscription, checkout, type PlanKey } from "@/server/services/subscription.service";
+import { redirect } from "next/navigation";
 import { deleteCustomRole, saveCustomRole } from "@/server/services/roles.service";
 import { numField, optStr, str } from "@/lib/utils";
 import { DomainError, type ActionState } from "@/server/types";
@@ -47,7 +49,7 @@ export async function inviteAction(_: ActionState, fd: FormData): Promise<Action
   const ctx = await requireCtx("settings.manage");
   return act(async () => {
     const u = await inviteUser(ctx, { name: str(fd, "name"), email: str(fd, "email"), roleKey: str(fd, "role"), password: str(fd, "password") });
-    return `${u.name} can now log in. Share the temporary password securely.`;
+    return `${u.name} has been invited by email.${u.inviteLink ? ` (Dev: set-password link ${u.inviteLink})` : ""}`;
   }, ["/settings"]);
 }
 
@@ -87,7 +89,7 @@ export async function planAction(_: ActionState, fd: FormData): Promise<ActionSt
     await changePlan(ctx, str(fd, "plan"), str(fd, "cycle") as "MONTHLY");
     revalidatePath("/", "layout");
     return "Plan updated";
-  });
+  }, [], { allowReadOnly: true });
 }
 
 export async function changePasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -97,4 +99,43 @@ export async function changePasswordAction(_: ActionState, fd: FormData): Promis
     await changeOwnPassword(ctx, str(fd, "current"), str(fd, "next"));
     return "Password changed 🔐";
   });
+}
+
+export async function checkoutAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("billing.manage");
+  let ok = false;
+  const res = await act(
+    async () => {
+      const r = await checkout(ctx, {
+        plan: str(fd, "plan") as PlanKey,
+        cycle: (str(fd, "cycle") || "MONTHLY") as "MONTHLY",
+        method: (str(fd, "method") || "FPX") as "FPX",
+        instrument: str(fd, "instrument") || str(fd, "bank"),
+      });
+      ok = true;
+      return `Payment received (${r.invoice.number}). Subscription active until ${r.periodEnd.toISOString().slice(0, 10)} 🎉`;
+    },
+    ["/", "/settings"],
+    { allowReadOnly: true },
+  );
+  if (ok) redirect("/settings?tab=billing&paid=1");
+  return res;
+}
+
+export async function cancelSubscriptionAction(_: ActionState, _fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("billing.manage");
+  return act(async () => {
+    await cancelSubscription(ctx);
+    return "Subscription cancelled. You keep full access until the end of the paid period.";
+  }, ["/", "/settings"], { allowReadOnly: true });
+}
+
+export async function closeWorkspaceAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireCtx("settings.manage");
+  const res = await act(async () => {
+    await closeWorkspace(ctx, str(fd, "confirm"));
+    return "Workspace closed";
+  }, [], { allowReadOnly: true });
+  if (res?.ok) redirect("/login");
+  return res;
 }

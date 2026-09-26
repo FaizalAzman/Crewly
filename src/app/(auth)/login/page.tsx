@@ -16,7 +16,8 @@ const DEMO = [
   { label: "Employee", email: `danial@${BRAND.demoDomain}`, emoji: "🙋" },
 ];
 
-export default function LoginPage() {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ reset?: string }> }) {
+  const sp = await searchParams;
   return (
     <div className="bg-dots grid min-h-screen lg:grid-cols-2">
       <div className="flex flex-col justify-between p-6 md:p-10">
@@ -25,6 +26,7 @@ export default function LoginPage() {
         <div className="mx-auto w-full max-w-md py-10">
           <h1 className="font-display text-4xl font-extrabold">Welcome back 👋</h1>
           <p className="mt-2 text-ink-2">Log in to your workspace to pick up where you left off.</p>
+          {sp.reset && <p className="mt-6 rounded-xl border-2 border-ink bg-lime px-3 py-2 text-sm font-bold">✅ Password saved. Log in with your new password.</p>}
           <div className="mt-8 rounded-3xl border-2 border-ink bg-card p-6 shadow-brutal-lg">
             <ActionForm action={loginAction} resetOnSuccess={false} className="space-y-4">
               <Field label="Work email">
@@ -33,6 +35,9 @@ export default function LoginPage() {
               <Field label="Password">
                 <Input name="password" type="password" required placeholder="••••••••" defaultValue="demo1234" />
               </Field>
+              <p className="-mt-2 text-right text-xs">
+                <Link href="/forgot-password" className="font-bold underline">Forgot password?</Link>
+              </p>
               <SubmitButton className="w-full" size="lg" pendingText="Signing you in…">
                 Log in →
               </SubmitButton>

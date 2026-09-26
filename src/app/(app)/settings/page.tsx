@@ -5,24 +5,27 @@ import { can } from "@/lib/permissions";
 import { Badge, Callout, Card, CardBody, CardHeader, Field, Input, Money, PageHeader, PersonCell, Select, StatusBadge, Table, Tabs, TD, TH, THead, TR } from "@/components/ui";
 import { ActionButton, ActionForm, FormModal, SubmitButton } from "@/components/forms";
 import { redirect } from "next/navigation";
-import { quote, PLAN_PRICES } from "@/server/services/settings.service";
+import { MIN_SEATS, PLANS, quoteFor, tenantAccess, type PlanKey } from "@/server/services/subscription.service";
+import { LinkButton } from "@/components/ui";
 import { assignableRoles } from "@/server/services/roles.service";
 import { fmtDate, fmtTime, rm } from "@/lib/utils";
 import { ROLE_LABEL, ROLES } from "@/lib/constants";
 import { PERMISSION_CATALOG, ROLE_PERMISSIONS, ROLE_SCOPE, permissionLabel } from "@/lib/permissions";
-import { activeAction, deleteRoleAction, inviteAction, planAction, resetPasswordAction, roleAction, saveRoleAction, workspaceAction } from "./actions";
+import { activeAction, cancelSubscriptionAction, closeWorkspaceAction, deleteRoleAction, inviteAction, resetPasswordAction, roleAction, saveRoleAction, workspaceAction } from "./actions";
 
 export const metadata: Metadata = { title: "Settings" };
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d, i) => ({ value: String(i), label: d }));
 
-export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ tab?: string; paid?: string }> }) {
   const ctx = await requireCtx();
   const manage = can(ctx, "settings.manage");
   const auditor = can(ctx, "audit.view");
   const billing = can(ctx, "billing.manage");
   if (!manage && !auditor && !billing) redirect("/me?denied=1");
-  const requested = (await searchParams).tab ?? (manage ? "workspace" : auditor ? "audit" : "billing");
+  const sp = await searchParams;
+  const paid = sp.paid === "1";
+  const requested = sp.tab ?? (manage ? "workspace" : auditor ? "audit" : "billing");
   const allowed: Record<string, boolean> = { workspace: manage, users: manage, roles: manage, audit: auditor, privacy: manage, billing };
   const tab = allowed[requested] ? requested : manage ? "workspace" : auditor ? "audit" : "billing";
   const [tenant, users, logs, invoices, headcount, customRoles, roleOptions] = await Promise.all([
@@ -34,7 +37,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     prisma.customRole.findMany({ where: { tenantId: ctx.tenantId }, include: { _count: { select: { users: true } } }, orderBy: { name: "asc" } }),
     assignableRoles(ctx),
   ]);
-  const q = quote(tenant.plan, headcount, tenant.billingCycle as "MONTHLY");
+  const access = tenantAccess(tenant);
 
   return (
     <>
@@ -228,37 +231,84 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       )}
 
       {tab === "billing" && billing && (
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-1" tone="bg-lime">
-            <CardHeader title={`${tenant.plan[0] + tenant.plan.slice(1).toLowerCase()} plan`} emoji="💎" subtitle={`${tenant.billingCycle.toLowerCase()} billing`} />
-            <CardBody className="space-y-2 text-sm">
-              <p className="font-display text-4xl font-extrabold">{rm(q.total)}</p>
-              <p>{q.billable} seats × {rm(q.price, { decimals: 0 })}{tenant.billingCycle === "YEARLY" ? " × 10 months" : ""} + 8% SST ({rm(q.sst)})</p>
-              <p className="text-xs">Active employees: {headcount} · minimum 10 seats</p>
-              <FormModal trigger="Change plan" triggerVariant="primary" title="Change plan" action={planAction}>
-                <Field label="Plan"><Select name="plan" defaultValue={tenant.plan} options={Object.entries(PLAN_PRICES).map(([p, v]) => ({ value: p, label: `${p[0] + p.slice(1).toLowerCase()} · RM${v}/employee/mo` }))} /></Field>
-                <Field label="Billing cycle"><Select name="cycle" defaultValue={tenant.billingCycle} options={[{ value: "MONTHLY", label: "Monthly" }, { value: "YEARLY", label: "Yearly (2 months free)" }]} /></Field>
-              </FormModal>
-            </CardBody>
-          </Card>
-          <Card className="lg:col-span-2">
+        <div className="space-y-6">
+          {paid && <Callout tone="lime" emoji="🎉">Payment received. Thank you! Your receipt is in the invoices below and was emailed to the owner.</Callout>}
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Card tone={access.writable ? "bg-lime" : "bg-cherry text-white"}>
+              <CardHeader title={`${PLANS[tenant.plan as PlanKey]?.name ?? tenant.plan} plan`} emoji="💎" subtitle={`${tenant.billingCycle.toLowerCase()} billing`} />
+              <CardBody className="space-y-2 text-sm">
+                <p className="font-display text-2xl font-extrabold">{access.message || "Subscription active"}</p>
+                {tenant.subscriptionStatus === "TRIALING" && tenant.trialEndsAt && <p>Trial ends {fmtDate(tenant.trialEndsAt, "long")}.</p>}
+                {tenant.currentPeriodEnd && tenant.subscriptionStatus !== "TRIALING" && <p>Current period ends {fmtDate(tenant.currentPeriodEnd, "long")}.</p>}
+                <p className="text-xs">Active employees: {headcount} · billed seats: {Math.max(MIN_SEATS, headcount)} (minimum {MIN_SEATS})</p>
+                {tenant.subscriptionStatus === "ACTIVE" && (
+                  <ActionButton action={cancelSubscriptionAction} fields={{}} variant="ghost" confirm="Cancel your subscription? You keep full access until the end of the paid period.">
+                    Cancel subscription
+                  </ActionButton>
+                )}
+              </CardBody>
+            </Card>
+            <div className="grid gap-4 md:grid-cols-3 lg:col-span-2">
+              {(Object.keys(PLANS) as PlanKey[]).map((key) => {
+                const p = PLANS[key];
+                const monthly = quoteFor(key, headcount, "MONTHLY");
+                const yearly = quoteFor(key, headcount, "YEARLY");
+                const current = tenant.plan === key && tenant.subscriptionStatus === "ACTIVE";
+                return (
+                  <div key={key} className={`rounded-2xl border-2 border-ink p-4 shadow-brutal-sm ${current ? "bg-sky" : "bg-card"}`}>
+                    <p className="font-display text-xl font-extrabold">{p.name}</p>
+                    <p className="text-xs text-ink-2">
+                      RM{p.price}/employee/month · {p.maxEmployees === Infinity ? "unlimited employees" : `up to ${p.maxEmployees} employees`} · {p.multiEntity ? "multiple entities" : "1 legal entity"}
+                    </p>
+                    <p className="font-display mt-3 text-2xl font-extrabold">{rm(monthly.total, { decimals: 0 })}<span className="text-xs font-bold">/mo incl. SST</span></p>
+                    <p className="text-[11px] text-muted">or {rm(yearly.total, { decimals: 0 })}/yr (2 months free)</p>
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      <LinkButton href={`/settings/checkout?plan=${key}&cycle=MONTHLY`} size="sm" variant={current ? "secondary" : "primary"}>{current ? "Renew" : "Monthly"}</LinkButton>
+                      <LinkButton href={`/settings/checkout?plan=${key}&cycle=YEARLY`} size="sm" variant="secondary">Yearly</LinkButton>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <Card>
             <CardHeader title="Invoices" emoji="🧾" />
             <Table>
-              <THead><tr><TH>Invoice</TH><TH>Period</TH><TH>Seats</TH><TH className="text-right">Amount</TH><TH className="text-right">SST</TH><TH>Status</TH></tr></THead>
+              <THead><tr><TH>Invoice</TH><TH>Plan</TH><TH>Seats</TH><TH className="text-right">Amount</TH><TH className="text-right">SST</TH><TH>Status</TH><TH /></tr></THead>
               <tbody>
                 {invoices.map((i) => (
                   <TR key={i.id}>
-                    <TD className="font-mono text-xs">{i.number}</TD>
-                    <TD>{i.period}</TD>
+                    <TD className="font-mono text-xs">{i.number}<span className="block text-muted">{fmtDate(i.issuedAt)}</span></TD>
+                    <TD className="text-xs">{PLANS[i.plan as PlanKey]?.name ?? i.plan} · {i.cycle.toLowerCase()}</TD>
                     <TD>{i.seats}</TD>
                     <TD className="text-right"><Money value={i.amount} /></TD>
                     <TD className="text-right"><Money value={i.sst} /></TD>
                     <TD><StatusBadge status={i.status} /></TD>
+                    <TD className="text-right"><a href={`/api/pdf/invoice/${i.id}`} className="text-xs font-bold underline">PDF</a></TD>
                   </TR>
                 ))}
               </tbody>
             </Table>
           </Card>
+          {ctx.role === "OWNER" && (
+            <Card tone="bg-paper-2">
+              <CardHeader title="Danger zone" emoji="⚠️" subtitle="Owner only" />
+              <CardBody className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <p className="font-bold">Export all data</p>
+                  <p className="mb-2 text-xs text-ink-2">A JSON file with every employee, payslip, leave, claim and letter record (PDPA data portability).</p>
+                  <a href="/api/export/workspace" className="inline-flex h-10 items-center rounded-xl border-2 border-ink bg-card px-4 text-sm font-bold">Download export</a>
+                </div>
+                <div>
+                  <p className="font-bold">Close workspace</p>
+                  <p className="mb-2 text-xs text-ink-2">Everyone loses access immediately. Data is kept for 30 days, during which support can restore it.</p>
+                  <FormModal trigger="Close workspace…" triggerVariant="danger" title="Close workspace" subtitle="This signs everyone out." action={closeWorkspaceAction} submitLabel="Close it">
+                    <Field label={`Type "${tenant.name}" to confirm`}><Input name="confirm" required /></Field>
+                  </FormModal>
+                </div>
+              </CardBody>
+            </Card>
+          )}
         </div>
       )}
     </>

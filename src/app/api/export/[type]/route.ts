@@ -7,6 +7,7 @@ import { bankFile, cp39File, epfFile, socsoEisFile } from "@/lib/payroll/statuto
 import { slipRows, cp8d } from "@/server/services/tax.service";
 import { audit } from "@/server/guard";
 import { IMPORT_COLUMNS } from "@/server/services/import.service";
+import { exportWorkspace } from "@/server/services/settings.service";
 
 function csv(body: string, filename: string) {
   return new NextResponse(body, {
@@ -19,6 +20,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ type
   if (!ctx) return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   const { type } = await params;
   const sp = req.nextUrl.searchParams;
+
+  if (type === "workspace") {
+    if (ctx.role !== "OWNER") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const data = await exportWorkspace(ctx);
+    return new NextResponse(JSON.stringify(data, null, 2), {
+      headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="crewly-export-${new Date().toISOString().slice(0, 10)}.json"` },
+    });
+  }
 
   if (type === "employee-template") {
     if (!can(ctx, "employee.manage")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });

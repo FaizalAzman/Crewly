@@ -7,6 +7,7 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth/session-token";
 import { can, type Permission } from "@/lib/permissions";
 import type { Ctx } from "./types";
 import { ctxFromUser } from "./ctx";
+import { tenantAccess } from "./services/subscription.service";
 
 export const getSessionUser = cache(async () => {
   const store = await cookies();
@@ -17,6 +18,8 @@ export const getSessionUser = cache(async () => {
     include: { tenant: true, customRole: true, employee: { select: { id: true, fullName: true, avatarColor: true, jobTitle: true } } },
   });
   if (!user || !user.active || user.tenantId !== payload.tid) return null;
+  // Suspended or closed workspaces lose access immediately (operators keep theirs).
+  if (!tenantAccess(user.tenant).canLogin && !user.platformAdmin) return null;
   return user;
 });
 

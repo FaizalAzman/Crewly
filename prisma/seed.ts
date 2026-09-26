@@ -108,25 +108,38 @@ const PEOPLE: Person[] = [
   { key: "daniel", name: "Daniel Fernandez", preferred: "Daniel", ic: "910303-10-5591", race: "OTHERS", religion: "CHRISTIANITY", marital: "SINGLE", dept: "SAL", title: "Partnerships Manager", grade: "G4", salary: 9800, join: "2025-05-05", manager: "kelvin", branch: "KL" },
 ];
 
+const TENANT_TABLES = [
+  "leaveRequest", "rosterEntry", "attendanceRecord", "overtimeRequest", "payrollAdjustment", "payrollRun", "claim", "loan", "compensationChange",
+  "department", "jobGrade", "position", "branch", "leaveType", "payItem", "claimType", "shift", "checklistTemplate", "checklist", "letterTemplate",
+  "generatedLetter", "policy", "announcement", "kudos", "survey", "ticket", "separation", "reviewCycle", "goal", "performanceReview",
+  "trainingProgram", "asset", "disciplinaryCase", "grievance", "workPermit", "benefitPlan", "panelClinic", "candidate", "jobOpening",
+  "publicHoliday", "outboundEmail", "employee",
+] as const;
+
+async function wipeTenant(slug: string) {
+  const t = await prisma.tenant.findUnique({ where: { slug } });
+  if (!t) return;
+  // tenant-scoped tables without FK cascade from Tenant
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const model of TENANT_TABLES) await (prisma as any)[model].deleteMany({ where: { tenantId: t.id } });
+  await prisma.tenant.delete({ where: { id: t.id } });
+}
+
+/** Other customer workspaces so the operator console has realistic data. */
+const EXTRA_WORKSPACES = [
+  { slug: "kopi-kaki-cafe", company: "Kopi Kaki Café Sdn Bhd", owner: "Wong Mei Kuan", email: "owner@kopikaki.my", state: "PULAU_PINANG", status: "TRIALING", trialDays: 9, plan: "STARTER", staff: 6 },
+  { slug: "borneo-timber-works", company: "Borneo Timber Works Sdn Bhd", owner: "James Lajim", email: "james@borneotimber.my", state: "SABAH", status: "TRIALING", trialDays: -3, plan: "GROWTH", staff: 12 },
+  { slug: "nusantara-clinics", company: "Nusantara Clinics Sdn Bhd", owner: "Dr. Farhana Idris", email: "farhana@nusantaraclinics.my", state: "SELANGOR", status: "ACTIVE", plan: "GROWTH", cycle: "YEARLY", staff: 18 },
+  { slug: "petaling-printing", company: "Petaling Printing Sdn Bhd", owner: "Lee Ah Chai", email: "ahchai@petalingprint.my", state: "SELANGOR", status: "SUSPENDED", plan: "STARTER", staff: 4, reason: "Chargeback on card payment" },
+];
+
 async function main() {
   console.log("🌱 Seeding demo workspace…");
-  // Clean slate for the demo tenant only.
-  const existing = await prisma.tenant.findUnique({ where: { slug: "lumen-digital" } });
-  for (const model of [
-    "leaveRequest", "rosterEntry", "attendanceRecord", "overtimeRequest", "payrollAdjustment", "payrollRun", "claim", "loan", "compensationChange",
-    "department", "jobGrade", "position", "branch", "leaveType", "payItem", "claimType", "shift", "checklistTemplate", "checklist", "letterTemplate",
-    "generatedLetter", "policy", "announcement", "kudos", "survey", "ticket", "separation", "reviewCycle", "goal", "performanceReview",
-    "trainingProgram", "asset", "disciplinaryCase", "grievance", "workPermit", "benefitPlan", "panelClinic", "candidate", "jobOpening",
-    "publicHoliday", "employee",
-  ] as const) {
-    // tenant-scoped tables without FK cascade from Tenant
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (existing) await (prisma as any)[model].deleteMany({ where: { tenantId: existing.id } });
-  }
-  if (existing) await prisma.tenant.delete({ where: { id: existing.id } });
+  // Clean slate for every demo workspace (idempotent re-seed).
+  for (const slug of ["lumen-digital", "crewly-hq", ...EXTRA_WORKSPACES.map((w) => w.slug)]) await wipeTenant(slug);
 
   const tenant = await prisma.tenant.create({
-    data: { name: "Lumen Digital", slug: "lumen-digital", plan: "ENTERPRISE", seats: 60, trialEndsAt: null, restDay: 0, offDay: 6, workDaysPerWeek: 5 },
+    data: { name: "Lumen Digital", slug: "lumen-digital", plan: "ENTERPRISE", billingCycle: "MONTHLY", seats: 60, trialEndsAt: D("2026-01-15"), subscriptionStatus: "ACTIVE", currentPeriodEnd: D("2026-10-31"), onboardedAt: D("2026-01-10"), restDay: 0, offDay: 6, workDaysPerWeek: 5, createdAt: D("2026-01-01") },
   });
   const T = tenant.id;
   await bootstrapTenant(T);
@@ -135,6 +148,8 @@ async function main() {
     data: {
       tenantId: T, name: BRAND.demoCompany, regNo: "201901012345 (1321456-K)", epfNo: "019283746", socsoNo: "E1000123456Z", taxNo: "E 9123456708",
       hrdfNo: "HRD-1000123", address: "Level 18, The Vertical, Bangsar South, 59200 Kuala Lumpur", state: "KUALA_LUMPUR", phone: "+60 3-2201 8800", isDefault: true,
+      letterheadColor: "#5B3FD6", letterheadContact: "people@lumendigital.my · www.lumendigital.my", letterheadFooter: "Lumen Digital Sdn Bhd · Registered office: Level 18, The Vertical, Bangsar South, 59200 Kuala Lumpur · Private & confidential",
+      signatoryName: "Aisyah binti Rahman", signatoryTitle: "Head of People",
     },
   });
   const logi = await prisma.company.create({
@@ -683,14 +698,61 @@ async function main() {
     const seats = 44 + Math.floor(m / 3);
     const amount = seats * 18;
     await prisma.invoice.create({
-      data: { tenantId: T, number: `INV-2026-${String(m).padStart(4, "0")}`, period: `2026-${String(m).padStart(2, "0")}`, seats, amount, sst: round2(amount * 0.08), status: m === 9 ? "DUE" : "PAID", issuedAt: D(`2026-${String(m).padStart(2, "0")}-01`) },
+      data: { tenantId: T, number: `INV-2026-LUMEND-${String(m).padStart(4, "0")}`, period: `2026-${String(m).padStart(2, "0")}`, seats, amount, sst: round2(amount * 0.08), status: "PAID", plan: "ENTERPRISE", cycle: "MONTHLY", paymentRef: `SBX-DEMO${m}`, paidAt: D(`2026-${String(m).padStart(2, "0")}-01`), issuedAt: D(`2026-${String(m).padStart(2, "0")}-01`) },
     });
   }
 
   // Company holiday
   await prisma.publicHoliday.create({ data: { tenantId: T, date: D("2026-12-31"), name: "Lumen Year-End Recharge Day 🎉", states: "ALL", kind: "COMPANY", year: 2026 } });
 
+  // ── Crewly HQ (platform operator) ──
+  const hq = await prisma.tenant.create({ data: { name: "Crewly HQ", slug: "crewly-hq", plan: "ENTERPRISE", subscriptionStatus: "ACTIVE", currentPeriodEnd: D("2099-12-31"), onboardedAt: new Date() } });
+  await prisma.company.create({ data: { tenantId: hq.id, name: "Crewly Technologies Sdn Bhd", state: "KUALA_LUMPUR", isDefault: true } });
+  await prisma.user.create({ data: { tenantId: hq.id, email: "admin@crewly.my", name: "Crewly Ops", role: "OWNER", platformAdmin: true, passwordHash } });
+
+  // ── Other customer workspaces ──
+  const { signup } = await import("../src/server/services/auth.service");
+  const staffNames = ["Ahmad", "Siti", "Tan", "Kumar", "Nurul", "Lim", "Rajesh", "Aina", "Wong", "Hafiz", "Mei", "Farid", "Lina", "Arif", "Grace", "Daniel", "Zara", "Imran"];
+  for (const [wi, w] of EXTRA_WORKSPACES.entries()) {
+    const { tenant: t, user } = await signup({ companyName: w.company, name: w.owner, email: w.email, password: PASSWORD, state: w.state, headcount: w.staff });
+    const created = new Date(Date.now() - (30 + wi * 20) * 86400000);
+    await prisma.tenant.update({
+      where: { id: t.id },
+      data: {
+        slug: w.slug,
+        plan: w.plan,
+        billingCycle: w.cycle ?? "MONTHLY",
+        subscriptionStatus: w.status,
+        createdAt: created,
+        trialEndsAt: w.trialDays !== undefined ? new Date(Date.now() + w.trialDays * 86400000) : new Date(created.getTime() + 14 * 86400000),
+        currentPeriodEnd: w.status === "ACTIVE" ? D("2027-03-01") : null,
+        suspendedReason: w.reason ?? null,
+        onboardedAt: w.status === "ACTIVE" ? created : null,
+      },
+    });
+    const octx = ctxFromUser({ ...user, tenantId: t.id });
+    await prisma.company.updateMany({ where: { tenantId: t.id }, data: { regNo: `20${20 + wi}010${wi}4567 (14${wi}5678-X)`, epfNo: `0${wi}1234567`, socsoNo: `E10000${wi}567Z`, taxNo: `E 9${wi}12345678` } });
+    for (let k = 0; k < w.staff; k++) {
+      const fn = staffNames[(k + wi * 3) % staffNames.length];
+      await createEmployee(octx, {
+        fullName: `${fn} ${["bin Ali", "binti Omar", "Chee Keong", "a/l Muthu", "Mei Ling", "Wei Jie"][k % 6]}`,
+        email: `staff${k + 1}@${w.slug}.test`,
+        icNo: `9${k % 9}0${(k % 9) + 1}1${wi}-10-${String(5000 + k * 7 + wi).slice(-4, -1)}${k % 2}`,
+        jobTitle: ["Barista", "Supervisor", "Clerk", "Technician", "Nurse", "Operator"][k % 6],
+        joinDate: D("2025-03-01"),
+        basicSalary: 1800 + k * 150,
+        probationMonths: 0,
+      }, { skipOnboarding: true }).catch(() => undefined);
+    }
+    if (w.status === "ACTIVE") {
+      await prisma.invoice.create({ data: { tenantId: t.id, number: `INV-2026-${w.slug.slice(0, 6).toUpperCase()}-0001`, period: "2026-03", seats: w.staff, amount: w.staff * 12 * 10, sst: round2(w.staff * 12 * 10 * 0.08), status: "PAID", plan: w.plan, cycle: "YEARLY", paymentRef: "SBX-DEMOY1", paidAt: D("2026-03-01"), issuedAt: D("2026-03-01") } });
+    }
+    await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(Date.now() - wi * 3 * 86400000) } });
+  }
+  console.log(`  ✓ platform: Crewly HQ operator + ${EXTRA_WORKSPACES.length} more customer workspaces`);
+
   console.log("✅ Done! Log in with any demo account using password:", PASSWORD);
+  console.log("   Platform operator console: admin@crewly.my → /platform");
   console.log(`   HR admin: aisyah@${domain} · Payroll: meiling@${domain} · Manager: raj@${domain} · Employee: danial@${domain} · Owner: ceo@${domain}`);
 }
 

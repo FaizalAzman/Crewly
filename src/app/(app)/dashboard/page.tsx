@@ -9,6 +9,8 @@ import { holidayAppliesToState } from "@/lib/calendar";
 import { countPendingApprovals } from "@/server/services/approvals.service";
 import { approvalScope } from "@/server/services/scope";
 import { can } from "@/lib/permissions";
+import { setupProgress } from "@/server/services/onboarding.service";
+import { Progress } from "@/components/ui";
 import { permitAlert } from "@/server/services/relations.service";
 import { MONTHS, ACTIVE_STATUSES } from "@/lib/constants";
 
@@ -49,6 +51,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     prisma.company.findFirst({ where: { tenantId: T, isDefault: true } }),
   ]);
 
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: T } });
+  const setup = can(ctx, "settings.manage") && !tenant.onboardedAt ? await setupProgress(T, ctx.userId) : null;
   const upcomingLeave = seePay
     ? []
     : await prisma.leaveRequest.findMany({
@@ -107,6 +111,16 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </>
         }
       />
+
+      {setup && (
+        <Link href="/welcome" className="press mb-6 block rounded-2xl border-2 border-ink bg-lime p-4 shadow-brutal">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-display text-lg font-extrabold">🚀 Finish setting up your workspace</p>
+            <span className="text-sm font-bold">{setup.done}/{setup.total} done · continue →</span>
+          </div>
+          <Progress value={setup.percent} className="mt-2 bg-card" />
+        </Link>
+      )}
 
       {sp.welcome && (
         <div className="mb-6">

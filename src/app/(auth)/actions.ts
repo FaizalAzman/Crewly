@@ -53,7 +53,7 @@ export async function signupAction(_: ActionState, fd: FormData): Promise<Action
     if (e instanceof ZodError) return { ok: false, error: e.issues[0]?.message ?? "Please check the form" };
     throw e;
   }
-  redirect("/dashboard?welcome=1");
+  redirect("/welcome");
 }
 
 export async function logoutAction() {

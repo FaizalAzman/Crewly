@@ -20,6 +20,11 @@ model Tenant {
   plan            String   @default("GROWTH") // STARTER | GROWTH | ENTERPRISE
   billingCycle    String   @default("MONTHLY") // MONTHLY | YEARLY
   trialEndsAt     DateTime?
+  subscriptionStatus String @default("TRIALING") // TRIALING | ACTIVE | PAST_DUE | CANCELLED | SUSPENDED
+  currentPeriodEnd   DateTime?
+  suspendedReason    String?
+  onboardedAt        DateTime?
+  closedAt           DateTime?
   seats           Int      @default(50)
   workDaysPerWeek Float    @default(5) // 5 | 5.5 | 6
   restDay         Int      @default(0) // 0 = Sunday ... 6 = Saturday
@@ -54,10 +59,37 @@ model User {
   employeeId   String?   @unique
   employee     Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   active       Boolean   @default(true)
+  platformAdmin Boolean  @default(false) // Crewly operator (cross-tenant console)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
 
   notifications Notification[]
+  resetTokens   PasswordResetToken[]
+}
+
+/// Single-use token for password resets and invitations (only the hash is stored).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  purpose   String    @default("RESET") // RESET | INVITE
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+/// Outbound email log. The mailer writes every message here (and sends via SMTP when configured).
+model OutboundEmail {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  to        String
+  subject   String
+  body      String
+  kind      String   @default("GENERAL") // WELCOME | RESET | INVITE | TRIAL | BILLING | GENERAL
+  status    String   @default("QUEUED") // QUEUED | SENT | LOGGED | FAILED
+  error     String?
+  createdAt DateTime @default(now())
 }
 
 /// Tenant-defined role: a named bundle of permissions plus a data scope.
@@ -125,7 +157,11 @@ model Invoice {
   seats     Int
   amount    Float
   sst       Float
-  status    String   @default("PAID") // PAID | DUE | OVERDUE
+  status    String   @default("PAID") // PAID | DUE | OVERDUE | VOID
+  plan      String   @default("GROWTH")
+  cycle     String   @default("MONTHLY")
+  paymentRef String?
+  paidAt    DateTime?
   issuedAt  DateTime @default(now())
 }
 

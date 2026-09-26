@@ -65,7 +65,7 @@ describe("Sign-up & authentication", () => {
   it("authenticates with the right password (case-insensitive email) and logs it", async () => {
     const e = email();
     const { tenant } = await signup({ companyName: "Login Co", name: "Lina", email: e, password: "correct-horse" });
-    await expect(authenticate(e, "wrong-password")).rejects.toThrow(/doesn't match/);
+    await expect(authenticate(e, "wrong-password")).rejects.toThrow(/don't match/);
     const u = await authenticate(e.toUpperCase(), "correct-horse");
     expect(u.lastLoginAt).not.toBeNull();
     expect(await prisma.auditLog.count({ where: { tenantId: tenant.id, action: "LOGIN" } })).toBe(1);

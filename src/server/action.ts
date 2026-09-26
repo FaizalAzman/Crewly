@@ -3,13 +3,27 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { ZodError } from "zod";
 import { DomainError, type ActionState } from "./types";
+import { getSessionUser } from "./context";
+import { tenantAccess } from "./services/subscription.service";
 
 /**
  * Wraps a server action body: converts domain / validation errors into ActionState
  * and revalidates the given paths on success.
  */
-export async function act(fn: () => Promise<string | void | { message?: string; data?: unknown }>, paths: string[] = []): Promise<ActionState> {
+export async function act(
+  fn: () => Promise<string | void | { message?: string; data?: unknown }>,
+  paths: string[] = [],
+  opts: { allowReadOnly?: boolean } = {},
+): Promise<ActionState> {
   try {
+    // Read-only workspaces (trial ended, unpaid, cancelled) can still pay; everything else is blocked.
+    if (!opts.allowReadOnly) {
+      const user = await getSessionUser();
+      if (user) {
+        const access = tenantAccess(user.tenant);
+        if (!access.writable) return { ok: false, error: `${access.message} Go to Settings → Plan & billing.` };
+      }
+    }
     const res = await fn();
     for (const p of paths) revalidatePath(p);
     if (typeof res === "string") return { ok: true, message: res };

@@ -7,6 +7,8 @@ import { eaForm } from "@/server/services/tax.service";
 import { letterPdf } from "@/server/pdf/letter";
 import { payslipPdf } from "@/server/pdf/payslip";
 import { eaPdf } from "@/server/pdf/ea";
+import { invoicePdf } from "@/server/pdf/invoice";
+import { PLANS, type PlanKey } from "@/server/services/subscription.service";
 import { DomainError } from "@/server/types";
 import { fmtDate, periodLabel } from "@/lib/utils";
 
@@ -78,6 +80,32 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ kind
         netPay: s.netPay,
       });
       return pdf(bytes, `Payslip ${s.period} - ${e.fullName}.pdf`, download);
+    }
+
+    if (kind === "invoice") {
+      if (!can(ctx, "billing.manage")) return notFound;
+      const inv = await prisma.invoice.findFirst({ where: { id, tenantId: ctx.tenantId } });
+      if (!inv) return notFound;
+      const [tenant, company] = await Promise.all([
+        prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } }),
+        prisma.company.findFirst({ where: { tenantId: ctx.tenantId, isDefault: true } }),
+      ]);
+      const plan = PLANS[inv.plan as PlanKey] ?? PLANS.GROWTH;
+      const bytes = await invoicePdf({
+        number: inv.number,
+        issuedAt: inv.issuedAt,
+        paidAt: inv.paidAt ?? (inv.status === "PAID" ? inv.issuedAt : null),
+        status: inv.status,
+        customer: { name: company?.name ?? tenant.name, address: company?.address ?? null, regNo: company?.regNo ?? null },
+        plan: plan.name,
+        cycle: inv.cycle,
+        seats: inv.seats,
+        unitPrice: plan.price,
+        amount: inv.amount,
+        sst: inv.sst,
+        paymentRef: inv.paymentRef,
+      });
+      return pdf(bytes, `${inv.number}.pdf`, download);
     }
 
     if (kind === "ea") {

@@ -9,6 +9,7 @@ import { initLeaveBalances } from "./leave.service";
 import { createChecklistFromTemplate } from "./lifecycle.service";
 import { hashPassword } from "./auth.service";
 import { assertNoEscalation, resolveRoleKey } from "./roles.service";
+import { assertCanAddEmployees } from "./subscription.service";
 
 const AVATAR_COLORS = ["#FFD23F", "#C6F432", "#5CC8FF", "#FF8FD8", "#FF6B35", "#3DDC97", "#B69CFF", "#FFB4A2"];
 
@@ -105,6 +106,7 @@ export async function nextEmployeeNo(tenantId: string) {
 export async function createEmployee(ctx: Ctx, input: EmployeeInput, opts: { createLogin?: boolean; loginPassword?: string; skipOnboarding?: boolean } = {}) {
   assertCan(ctx, "employee.manage");
   const data = validateEmployeeRules(employeeSchema.parse(input));
+  await assertCanAddEmployees(ctx.tenantId);
 
   const companyId = data.companyId ?? (await prisma.company.findFirst({ where: { tenantId: ctx.tenantId, isDefault: true } }))?.id;
   if (!companyId) throw new DomainError("Create a company (legal entity) first.");

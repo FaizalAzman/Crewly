@@ -24,6 +24,17 @@ To open it from a phone on the same Wi-Fi, use `http://<your-LAN-IP>:3000`. `nex
 | Payroll | meiling@lumendigital.my |
 | Manager | raj@lumendigital.my |
 | Employee | danial@lumendigital.my |
+| Custom role "Recruiter" | azlan@lumendigital.my |
+| **Crewly operator** (platform console at `/platform`) | admin@crewly.my |
+
+Other customer workspaces, so the operator console and billing states have realistic data:
+
+| Workspace | Owner login | State |
+|---|---|---|
+| Kopi Kaki Café | owner@kopikaki.my | Starter trial, 9 days left |
+| Borneo Timber Works | james@borneotimber.my | Trial ended, so read-only until they pay |
+| Nusantara Clinics | farhana@nusantaraclinics.my | Paying, Growth yearly |
+| Petaling Printing | ahchai@petalingprint.my | Suspended, so login is refused |
 
 The seed creates 44 employees across two legal entities and three branches (KL, Penang, JB), including foreign workers. It also runs nine months of payroll (Jan–Sep 2026) through the real engine, with Sep awaiting approval, and adds leave, attendance, claims, OT, loans, reviews, training, ER cases, permits, surveys and tickets.
 
@@ -39,6 +50,30 @@ The seed creates 44 employees across two legal entities and three branches (KL, 
 | Compliance | Disciplinary (show-cause and domestic inquiry), Grievances & sexual harassment, Foreign workforce (PLKS/EP, FOMEMA, levy), Letters & policies, Assets |
 | Culture | Announcements, kudos, pulse surveys (eNPS), HR helpdesk |
 | Admin | Reports & analytics, Settings (workspace policy, users & roles, audit log, PDPA, billing) |
+
+## SaaS: how customers get on Crewly
+
+1. **Sign up** (`/signup`) creates a workspace: company, owner login, Malaysian defaults (leave types, pay items, claim types, letter templates, policies, grades, holidays) and a **14-day free trial**. A welcome email is sent.
+2. **Guided setup** (`/welcome` and a dashboard card) tracks six steps: statutory numbers, departments and branches, the owner's own profile, employees (one by one or CSV import), inviting the HR team, and the first payroll. Progress comes from the real data, so it can't drift.
+3. **Invites** email a set-password link (7 days). **Forgot password** emails a 1-hour, single-use link. Only a sha256 hash of each token is stored, and requests are throttled.
+4. **Billing** (`Settings → Billing`): plans are Starter RM6 (up to 25 employees), Growth RM12 and Enterprise RM18 (multiple legal entities), per employee per month, with a minimum of 10 seats. Yearly billing gives 2 months free. SST is 8%. Checkout charges through a `PaymentGateway` adapter, records a paid invoice, emails a receipt, and the invoice downloads as a PDF. Plan limits are enforced when adding employees or switching plans.
+5. **Access follows the subscription.** Trials and active subscriptions have full access. An ended trial, an unpaid subscription or a lapsed cancellation becomes **read-only**: people can still log in, view data and pay. Suspended or closed workspaces can't log in. Cancelling keeps access until the paid period ends.
+6. **Owner data rights:** export the whole workspace as JSON (audited), or close it by typing its name. Support can restore it within 30 days.
+7. **Operator console** (`/platform`, for users with `platformAdmin`): MRR, paying customers, trials, at-risk accounts and sign-ups, plus per-workspace detail. Operators can extend trials, suspend or reactivate workspaces, and comp a plan, and every action goes into the customer's audit log. It also has an email outbox.
+
+**Before going live**, swap in real providers at these two points:
+- `gateway()` in `src/server/services/subscription.service.ts` currently uses a sandbox gateway. FPX and cards succeed; card `4000 0000 0000 0002` declines. Implement `PaymentGateway` for Billplz, Stripe or iPay88, and add a webhook for recurring renewals.
+- `sendMail()` in `src/server/services/mail.service.ts` writes to an outbox table, which you can view at `/platform/emails`. Set `MAIL_PROVIDER` and send via SES, Postmark or Resend. Set `APP_URL` for links in emails.
+
+## Documents & PDFs
+
+- Letters, payslips, Form EA and invoices are generated as **real PDFs** with pdfkit (vector text you can select and search), not screenshots of web pages. The routes are `/api/pdf/{letter|payslip|ea|invoice}/<id>`, and adding `?inline=1` opens the PDF in the browser.
+- The **letterhead** is set once per legal entity in `Documents → Letterhead`: logo, colour, layout, contact line, footer, signatory and signature image. It is applied at render time, so changing it updates every letter.
+- Letters go through **Draft → Issued → Acknowledged**. A letter can't be issued while it still has unfilled placeholders such as `[describe matter]`. Employees see issued letters under **Me → Documents** and acknowledge them there.
+
+## Roles
+
+There are five built-in roles: Owner, HR Admin, Payroll, Manager and Employee. You can add **custom roles** in `Settings → Roles` with any set of permissions and either company-wide or team scope. People below Owner can't grant permissions they don't hold themselves, and a workspace always keeps at least one owner.
 
 The full product plan is in [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -61,14 +96,17 @@ The submission files (KWSP, PERKESO, LHDN CP39, bank) follow the published colum
 src/
   lib/                 pure logic (no DB): statutory engines, payroll engine, calendar, NRIC, analytics
   server/
-    services/          business rules — framework-free, take a Ctx {tenantId, userId, role, employeeId}
+    services/          business rules — framework-free, take a Ctx {tenantId, userId, role, permissions, scope, employeeId}
     guard.ts           permissions, approval chain, audit log, notifications
     context.ts         Next.js glue: session cookie → Ctx
     action.ts          wraps server actions (domain errors → form messages)
   app/
     (auth)/            login, sign-up (creates a workspace)
     (app)/<module>/    pages (server components) + thin server actions calling services
-    api/export/        CSV exports (employees, KWSP, PERKESO, CP39, bank, CP8D)
+    api/export/        CSV exports (employees, KWSP, PERKESO, CP39, bank, CP8D) + workspace JSON
+    api/pdf/           true PDFs (letters, payslips, EA, invoices) — src/server/pdf
+    api/files/         uploaded files (stored under /storage, access-checked)
+    platform/          Crewly operator console
   components/          neo-brutalist UI kit, forms/modals, charts
 prisma/schema.prisma   ~60 models, multi-tenant (tenantId on every row)
 ```
@@ -86,7 +124,7 @@ Two **separate** Vitest projects:
 | **Unit** (`tests/unit`) | `npm run test:unit` | Pure functions with no database: EPF / SOCSO / EIS / PCB tables and edge cases, Employment Act rules, HRD levy, the payroll engine (proration, unpaid leave, bonus, OT, claims, loans, zakat, TP1), statutory file formats, NRIC parsing, the working-day calendar, analytics and domain helpers |
 | **Business rules** (`tests/business`) | `npm run test:business` | End-to-end rules through the real services against a throwaway SQLite database (`prisma/test.db`, recreated each run, one isolated tenant per spec): employees, leave entitlement and approvals, payroll workflow and calculations, claims and loan limits, attendance and OT, separation settlement, recruitment and performance, disciplinary due process, harassment complaints, permits, engagement, sign-up and auth, tenant isolation, roles and billing |
 
-`npm test` runs both. Current status: **464 tests** (263 unit + 201 business), all passing.
+`npm test` runs both. `TEST_DB_NAME=other.db` points the business suite at a different throwaway file, so two runs can happen at once.
 
 `scripts/smoke.ts` renders every page as a given user: `npx tsx scripts/smoke.ts aisyah@lumendigital.my`.
 
@@ -103,5 +141,6 @@ Two **separate** Vitest projects:
 
 - Money is stored as `Float` rounded to 2 dp for SQLite. On PostgreSQL, switch to `Decimal`.
 - Islamic holiday dates depend on moon sighting; the holiday table is editable in-app.
-- File uploads (receipts, documents) are stored as references or links. Connect S3 or similar storage for binaries.
+- Uploads (receipts, MCs, CVs, logos) are stored on local disk under `/storage` (max 5 MB; PDF, images, Word). Point `UPLOAD_DIR` to a mounted volume, or swap in S3, for production.
+- Payments and email go through sandbox/outbox adapters until a real provider is configured (see **SaaS** above).
 - Browsers only share GPS over HTTPS, so on plain-HTTP LAN access clock-ins are accepted but flagged "no location".

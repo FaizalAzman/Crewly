@@ -9,11 +9,14 @@ import path from "node:path";
  */
 export default function setup() {
   const root = path.resolve(__dirname, "../..");
-  const dbFile = path.join(root, "prisma", "test.db");
+  // TEST_DB_NAME lets parallel runs (e.g. a QA agent) use their own file.
+  const name = process.env.TEST_DB_NAME ?? "test.db";
+  if (!/^[\w-]+\.db$/.test(name)) throw new Error("TEST_DB_NAME must look like something.db");
+  const dbFile = path.join(root, "prisma", name);
   for (const f of [dbFile, `${dbFile}-journal`]) rmSync(f, { force: true });
   execSync("npx prisma db push --skip-generate", {
     cwd: root,
-    env: { ...process.env, DATABASE_URL: "file:./test.db", PRISMA_HIDE_UPDATE_MESSAGE: "1" },
+    env: { ...process.env, DATABASE_URL: `file:./${name}`, PRISMA_HIDE_UPDATE_MESSAGE: "1" },
     stdio: "pipe",
   });
 }
