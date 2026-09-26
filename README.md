@@ -10,6 +10,7 @@ Crewly is a multi-tenant HR SaaS built for the Malaysian market. It covers the w
 npm install
 npx prisma db push        # creates prisma/dev.db (SQLite)
 npm run db:seed           # demo company "Lumen Digital Sdn Bhd"
+npm run pdf:browser       # one-off: the Chromium build that prints PDFs to match the screen
 npm run dev               # http://localhost:3000
 ```
 
@@ -70,7 +71,7 @@ The seed creates 44 employees across two legal entities and three branches (KL, 
 ## Documents & PDFs
 
 - Letters, payslips, Form EA and invoices download as **PDFs that look exactly like the document on screen**: the same React component, CSS and fonts. `/api/pdf/{letter|payslip|ea|invoice}/<id>` checks access, then headless Chromium prints the chrome-free page `/print/<kind>/<id>` to A4. Text stays real and selectable. Add `?inline=1` to open the PDF in the browser.
-- Chromium is found at `CHROMIUM_PATH`, then `$PLAYWRIGHT_BROWSERS_PATH/chromium`, then Playwright's default location. It loads the print page from this server only (`PDF_RENDER_ORIGIN`, default `http://127.0.0.1:$PORT`) and may not contact any other host. `PDF_RENDER_CONCURRENCY` (default 3) caps parallel renders. Without Chromium, or with `PDF_RENDERER=pdfkit`, the older pdfkit layout is used instead, so downloads keep working.
+- Install the browser once per machine with `npm run pdf:browser`. It pins the Chromium build that matches `playwright-core`; the generic `npx playwright install` fetches a different build, which won't be found. Chromium is found at `CHROMIUM_PATH`, then `$PLAYWRIGHT_BROWSERS_PATH/chromium`, then Playwright's default location. It loads the print page from this server only (`PDF_RENDER_ORIGIN`, default `http://127.0.0.1:$PORT`) and may not contact any other host. `PDF_RENDER_CONCURRENCY` (default 3) caps parallel renders. Without Chromium, or with `PDF_RENDERER=pdfkit`, the older pdfkit layout is used instead, so downloads keep working.
 - The **letterhead** is set once per legal entity in `Documents → Letterhead`: logo, colour, layout, contact line, footer, signatory and signature image. It is applied at render time, so changing it updates every letter.
 - Letter bodies use the Source Serif 4 web font (not the device's serif), so a letter looks the same on every screen and in its PDF.
 - Letters go through **Draft → Issued → Acknowledged**. A letter can't be issued while it still has unfilled placeholders such as `[describe matter]`. Employees see issued letters under **Me → Documents** and acknowledge them there.
